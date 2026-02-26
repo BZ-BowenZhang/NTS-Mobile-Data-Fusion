@@ -134,22 +134,29 @@ def calculate_factors(trips_dd: dd.DataFrame, nts_band_mode: pd.DataFrame, facto
 
 
 def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None) -> Path:
-    assert_files_exist([config.bt_parquet, config.eeh_list_csv, config.msoa_geojson, config.nts_csv])
+    required_files = [config.bt_parquet, config.msoa_geojson, config.nts_csv]
+    if config.msoa_filter_csv is not None:
+        required_files.append(config.msoa_filter_csv)
+    assert_files_exist(required_files)
 
     all_trips_dd = dd.read_parquet(config.bt_parquet, columns=BT_REQUIRED_COLUMNS)
     assert_dask_columns(all_trips_dd, BT_REQUIRED_COLUMNS, "BT parquet")
 
-    eeh_list = pd.read_csv(config.eeh_list_csv)
-    assert_dataframe_columns(eeh_list, ["MSOA21CD"], "EEH list csv")
-    eeh_set = set(eeh_list["MSOA21CD"].astype(str))
-
-    eeh_trips_dd = all_trips_dd[
-        all_trips_dd["origin_msoa"].isin(eeh_set) & all_trips_dd["destination_msoa"].isin(eeh_set)
-    ]
+    if config.msoa_filter_csv is not None:
+        filter_list = pd.read_csv(config.msoa_filter_csv)
+        assert_dataframe_columns(filter_list, ["MSOA21CD"], "MSOA filter list csv")
+        filter_set = set(filter_list["MSOA21CD"].astype(str))
+        trips_dd = all_trips_dd[
+            all_trips_dd["origin_msoa"].isin(filter_set) & all_trips_dd["destination_msoa"].isin(filter_set)
+        ]
+    else:
+        filter_set = None
+        trips_dd = all_trips_dd
 
     msoa = gpd.read_file(config.msoa_geojson).to_crs(epsg=27700)
     assert_dataframe_columns(msoa, ["MSOA21CD", "geometry"], "MSOA geojson")
-    msoa = msoa[msoa["MSOA21CD"].astype(str).isin(eeh_set)].copy()
+    if filter_set is not None:
+        msoa = msoa[msoa["MSOA21CD"].astype(str).isin(filter_set)].copy()
     msoa["centroid"] = msoa.geometry.centroid
     cent = pd.DataFrame(
         {
@@ -161,33 +168,33 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
 
     cent_o = cent.rename(columns={"MSOA21CD": "origin_msoa", "x": "ox", "y": "oy"})
     cent_d = cent.rename(columns={"MSOA21CD": "destination_msoa", "x": "dx", "y": "dy"})
-    eeh_trips_dd = eeh_trips_dd.merge(cent_o, on="origin_msoa", how="left")
-    eeh_trips_dd = eeh_trips_dd.merge(cent_d, on="destination_msoa", how="left")
+    trips_dd = trips_dd.merge(cent_o, on="origin_msoa", how="left")
+    trips_dd = trips_dd.merge(cent_d, on="destination_msoa", how="left")
 
-    meta = eeh_trips_dd._meta.assign(distance_m=np.float32(), distance_miles=np.float32())
-    eeh_trips_dd = eeh_trips_dd.map_partitions(_add_distances, meta=meta)
-    eeh_trips_dd = eeh_trips_dd.drop(columns=["ox", "oy", "dx", "dy"])
+    meta = trips_dd._meta.assign(distance_m=np.float32(), distance_miles=np.float32())
+    trips_dd = trips_dd.map_partitions(_add_distances, meta=meta)
+    trips_dd = trips_dd.drop(columns=["ox", "oy", "dx", "dy"])
 
-    eeh_trips_dd["volume"] = dd.to_numeric(eeh_trips_dd["volume"], errors="coerce").fillna(5).astype("int32")
+    trips_dd["volume"] = dd.to_numeric(trips_dd["volume"], errors="coerce").fillna(5).astype("int32")
 
     nts_df = pd.read_csv(config.nts_csv)
     labels = [x for x in nts_df["Trip length"].dropna().unique().tolist() if x != "All lengths"]
-    eeh_trips_dd = add_distance_bands(eeh_trips_dd, labels)
+    trips_dd = add_distance_bands(trips_dd, labels)
 
     nts_band_mode = build_nts_mode_shares(nts_df, year=config.year, region=config.region)
-    factors = calculate_factors(eeh_trips_dd, nts_band_mode, config.factor_min, config.factor_max)
+    factors = calculate_factors(trips_dd, nts_band_mode, config.factor_min, config.factor_max)
 
-    eeh_trips_dd = eeh_trips_dd.merge(
+    trips_dd = trips_dd.merge(
         factors.rename(columns={"bt_mode": "mode_of_transport"}),
         on=["distance_band", "mode_of_transport"],
         how="left",
     )
-    eeh_trips_dd["factor"] = eeh_trips_dd["factor"].fillna(1.0)
-    eeh_trips_dd["volume_adj"] = (eeh_trips_dd["volume"] * eeh_trips_dd["factor"]).round().astype("int64")
-    eeh_trips_dd = eeh_trips_dd.rename(columns={"factor": "adj_factor"})
+    trips_dd["factor"] = trips_dd["factor"].fillna(1.0)
+    trips_dd["volume_adj"] = (trips_dd["volume"] * trips_dd["factor"]).round().astype("int64")
+    trips_dd = trips_dd.rename(columns={"factor": "adj_factor"})
 
     check = (
-        eeh_trips_dd.groupby(["distance_band", "mode_of_transport"])[["volume", "volume_adj"]]
+        trips_dd.groupby(["distance_band", "mode_of_transport"])[["volume", "volume_adj"]]
         .sum()
         .compute()
         .reset_index()
@@ -208,11 +215,11 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     )
 
     ensure_parent(config.adjusted_parquet)
-    eeh_trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(config.adjusted_parquet)
+    trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(config.adjusted_parquet)
 
     if legacy_output_root is not None:
-        legacy_out = legacy_output_root / "EEH_trips_adjusted.parquet"
+        legacy_out = legacy_output_root / "trips_adjusted.parquet"
         ensure_parent(legacy_out)
-        eeh_trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(legacy_out)
+        trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(legacy_out)
 
     return config.adjusted_parquet

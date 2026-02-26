@@ -6,7 +6,6 @@ from pathlib import Path
 from .config import (
     DEFAULT_ADJUSTED_PARQUET,
     DEFAULT_BT_PARQUET,
-    DEFAULT_EEH_LIST,
     DEFAULT_FACTOR_MAX,
     DEFAULT_FACTOR_MIN,
     DEFAULT_LEGACY_OUTPUT_ROOT,
@@ -25,7 +24,12 @@ from .reassign import run_reassign
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bt-parquet", type=Path, default=DEFAULT_BT_PARQUET)
-    parser.add_argument("--eeh-list", type=Path, default=DEFAULT_EEH_LIST)
+    parser.add_argument(
+        "--msoa-filter-list",
+        type=Path,
+        default=None,
+        help="Optional MSOA filter list csv (MSOA21CD). If omitted, process all UK MSOAs in BT data.",
+    )
     parser.add_argument("--msoa-geojson", type=Path, default=DEFAULT_MSOA_GEOJSON)
     parser.add_argument("--nts-csv", type=Path, default=DEFAULT_NTS_CSV)
     parser.add_argument("--adjusted-parquet", type=Path, default=DEFAULT_ADJUSTED_PARQUET)
@@ -35,7 +39,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="EEH travel model pipeline")
+    parser = argparse.ArgumentParser(description="UK travel model pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_parser = sub.add_parser("run", help="Run reassignment and matrix generation")
@@ -73,7 +77,7 @@ def main() -> None:
     if args.command in {"run", "reassign"}:
         reassign_cfg = ReassignConfig(
             bt_parquet=args.bt_parquet,
-            eeh_list_csv=args.eeh_list,
+            msoa_filter_csv=args.msoa_filter_list,
             msoa_geojson=args.msoa_geojson,
             nts_csv=args.nts_csv,
             adjusted_parquet=args.adjusted_parquet,

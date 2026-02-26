@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eeh-pipeline"
+name = "uk-travel-pipeline"
 version = "0.1.0"
-description = "EEH travel model reassignment and OD matrix pipeline."
+description = "UK travel model reassignment and OD matrix pipeline."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-eeh-pipeline = "eeh_pipeline.cli:main"
+uk-travel-pipeline = "uk_travel_pipeline.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

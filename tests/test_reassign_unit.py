@@ -1,7 +1,7 @@
 import dask.dataframe as dd
 import pandas as pd
 
-from eeh_pipeline.reassign import add_distance_bands, build_nts_mode_shares, calculate_factors
+from uk_travel_pipeline.reassign import add_distance_bands, build_nts_mode_shares, calculate_factors
 
 
 def test_add_distance_bands_has_expected_labels():

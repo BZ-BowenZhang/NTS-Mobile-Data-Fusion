@@ -5,10 +5,9 @@ from pathlib import Path
 
 
 DEFAULT_BT_PARQUET = Path("data/raw/bt_api/bt_modal_share_All_UK_MSOA_2024_09_2025_09.parquet")
-DEFAULT_EEH_LIST = Path("data/raw/lookups/EEH_MSOACDs.csv")
 DEFAULT_MSOA_GEOJSON = Path("data/raw/geo/Middle_layer_Super_Output_Areas_December_2021_Boundaries_EW_BGC_V3_4916445166053426.geojson")
 DEFAULT_NTS_CSV = Path("data/raw/nts/nts9916.csv")
-DEFAULT_ADJUSTED_PARQUET = Path("data/processed/reassign/EEH_trips_adjusted.parquet")
+DEFAULT_ADJUSTED_PARQUET = Path("data/processed/reassign/trips_adjusted.parquet")
 DEFAULT_OUTPUTS_ROOT = Path("outputs")
 DEFAULT_LEGACY_OUTPUT_ROOT = Path("output")
 
@@ -22,7 +21,7 @@ DEFAULT_FACTOR_MAX = 100.0
 @dataclass(frozen=True)
 class ReassignConfig:
     bt_parquet: Path = DEFAULT_BT_PARQUET
-    eeh_list_csv: Path = DEFAULT_EEH_LIST
+    msoa_filter_csv: Path | None = None
     msoa_geojson: Path = DEFAULT_MSOA_GEOJSON
     nts_csv: Path = DEFAULT_NTS_CSV
     adjusted_parquet: Path = DEFAULT_ADJUSTED_PARQUET

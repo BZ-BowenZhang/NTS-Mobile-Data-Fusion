@@ -1,10 +1,10 @@
-# EEH Pipeline
+# UK Travel Pipeline
 
 Standard Python project for converting the notebook workflow into a reproducible CLI pipeline.
 
 ## Directory Contract
 
-- Code: `src/eeh_pipeline`
+- Code: `src/uk_travel_pipeline`
 - Raw immutable inputs: `data/raw`
 - Processed intermediates: `data/processed`
 - Final outputs: `outputs`
@@ -13,9 +13,9 @@ Standard Python project for converting the notebook workflow into a reproducible
 ## Expected Raw Inputs
 
 - `data/raw/bt_api/bt_modal_share_All_UK_MSOA_2024_09_2025_09.parquet`
-- `data/raw/lookups/EEH_MSOACDs.csv`
 - `data/raw/geo/msoa_2021_boundaries.geojson`
 - `data/raw/nts/nts9916.csv`
+- Optional MSOA filter list: `data/raw/lookups/region_MSOACDs.csv`
 
 This repo currently provides symlinks from these paths to your existing source files.
 
@@ -36,30 +36,37 @@ pip install -e .[dev]
 Run full pipeline:
 
 ```bash
-eeh-pipeline run
+uk-travel-pipeline run
+```
+
+By default, reassignment runs on all UK MSOAs in the BT parquet.
+To filter to a specific region, pass an MSOA list explicitly:
+
+```bash
+uk-travel-pipeline run --msoa-filter-list data/raw/lookups/region_MSOACDs.csv
 ```
 
 Run only reassignment:
 
 ```bash
-eeh-pipeline reassign
+uk-travel-pipeline reassign
 ```
 
 Run only matrix generation:
 
 ```bash
-eeh-pipeline matrices
+uk-travel-pipeline matrices
 ```
 
 Optional legacy outputs:
 
 ```bash
-eeh-pipeline run --legacy-output
+uk-travel-pipeline run --legacy-output
 ```
 
 ## Main Outputs
 
-- `data/processed/reassign/EEH_trips_adjusted.parquet`
+- `data/processed/reassign/trips_adjusted.parquet`
 - `outputs/reassign/adjustment_factors.csv`
 - `outputs/reassign/share_check.csv`
 - `outputs/matrices/typical_week_by_mode/OD_matrix_{MODE}_adjusted.csv`

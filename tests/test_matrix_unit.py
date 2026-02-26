@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from eeh_pipeline.config import MatrixConfig
-from eeh_pipeline.matrix import run_matrices
+from uk_travel_pipeline.config import MatrixConfig
+from uk_travel_pipeline.matrix import run_matrices
 
 
 def test_run_matrices_outputs_files(tmp_path: Path):
-    adjusted = tmp_path / "data" / "processed" / "reassign" / "EEH_trips_adjusted.parquet"
+    adjusted = tmp_path / "data" / "processed" / "reassign" / "trips_adjusted.parquet"
     adjusted.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(
         {

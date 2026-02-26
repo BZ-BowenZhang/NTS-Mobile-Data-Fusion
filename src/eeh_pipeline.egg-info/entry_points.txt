@@ -1,2 +1,0 @@
-[console_scripts]
-eeh-pipeline = eeh_pipeline.cli:main

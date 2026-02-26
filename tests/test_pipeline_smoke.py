@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from eeh_pipeline.config import MatrixConfig
-from eeh_pipeline.matrix import run_matrices
+from uk_travel_pipeline.config import MatrixConfig
+from uk_travel_pipeline.matrix import run_matrices
 
 
 def test_legacy_output_written_only_when_enabled(tmp_path: Path):

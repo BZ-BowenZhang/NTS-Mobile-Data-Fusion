@@ -1,4 +1,4 @@
-"""EEH pipeline package."""
+"""UK travel pipeline package."""
 
 __all__ = ["__version__"]
 
