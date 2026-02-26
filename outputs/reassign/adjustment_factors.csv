@@ -1,0 +1,33 @@
+distance_band,bt_mode,factor
+1 to under 2 miles,RAIL,0.8018959791971699
+1 to under 2 miles,ROAD,0.6887909805811736
+1 to under 2 miles,SUBWAY,6.464283614247969
+1 to under 2 miles,WALKING,4.230637803997744
+10 to under 25 miles,RAIL,3.0513235059673294
+10 to under 25 miles,ROAD,0.946677917348542
+10 to under 25 miles,SUBWAY,100.0
+10 to under 25 miles,WALKING,3.6715806984608923
+100 miles and over,RAIL,1.764980195492745
+100 miles and over,ROAD,0.9026555813628621
+100 miles and over,SUBWAY,0.01
+100 miles and over,WALKING,0.01
+2 to under 5 miles,RAIL,2.25205572390526
+2 to under 5 miles,ROAD,0.954831891954219
+2 to under 5 miles,SUBWAY,47.93653380089812
+2 to under 5 miles,WALKING,2.1175971536272495
+25 to under 50 miles,RAIL,10.477333173951497
+25 to under 50 miles,ROAD,0.7449485096833488
+25 to under 50 miles,SUBWAY,0.01
+25 to under 50 miles,WALKING,0.01
+5 to under 10 miles,RAIL,2.6521580608569053
+5 to under 10 miles,ROAD,0.98806951668927
+5 to under 10 miles,SUBWAY,100.0
+5 to under 10 miles,WALKING,0.5175161039413562
+50 to under 100 miles,RAIL,10.898442976868758
+50 to under 100 miles,ROAD,0.712848929590482
+50 to under 100 miles,SUBWAY,0.01
+50 to under 100 miles,WALKING,0.01
+Under 1 mile,RAIL,0.01
+Under 1 mile,ROAD,0.23797355841356432
+Under 1 mile,SUBWAY,5.740666085683051
+Under 1 mile,WALKING,3.8264256683445144

@@ -1,0 +1,5 @@
+# BT API raw data
+data/raw/bt_api/
+
+# Pipeline processed/intermediate data
+data/processed/
