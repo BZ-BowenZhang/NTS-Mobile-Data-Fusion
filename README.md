@@ -43,7 +43,9 @@ By default, reassignment runs on all UK MSOAs in the BT parquet.
 To filter to a specific region, pass an MSOA list explicitly:
 
 ```bash
-uk-travel-pipeline run --msoa-filter-list data/raw/lookups/region_MSOACDs.csv
+uk-travel-pipeline run \
+  --api-data-path data/raw/bt_api/bt_modal_share_All_UK_MSOA_2024_09_2025_09.parquet \
+  --msoa-filter-list-path data/raw/lookups/region_MSOACDs.csv
 ```
 
 Run only reassignment:
@@ -71,9 +73,3 @@ uk-travel-pipeline run --legacy-output
 - `outputs/reassign/share_check.csv`
 - `outputs/matrices/typical_week_by_mode/OD_matrix_{MODE}_adjusted.csv`
 - `outputs/matrices/weekday_AMpeak_by_mode/OD_matrix_{MODE}_adjusted.csv`
-
-## Migration Notes
-
-- Notebook logic from `reassign_travel_model.ipynb` and `generate_od_matrices.ipynb` is now implemented in package modules and CLI stages.
-- Safe fix applied: matrix stage uses `volume_adj` preferentially when deriving per-day and weekly values.
-- Previous `output/...` paths are written only when `--legacy-output` is enabled.

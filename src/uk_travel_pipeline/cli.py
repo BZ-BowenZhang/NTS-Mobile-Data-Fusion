@@ -23,12 +23,21 @@ from .reassign import run_reassign
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--bt-parquet", type=Path, default=DEFAULT_BT_PARQUET)
     parser.add_argument(
+        "--api-data-path",
+        "--bt-parquet",
+        dest="bt_parquet",
+        type=Path,
+        default=DEFAULT_BT_PARQUET,
+        help="Path to BT API parquet input data.",
+    )
+    parser.add_argument(
+        "--msoa-filter-list-path",
         "--msoa-filter-list",
+        dest="msoa_filter_list",
         type=Path,
         default=None,
-        help="Optional MSOA filter list csv (MSOA21CD). If omitted, process all UK MSOAs in BT data.",
+        help="Optional MSOA filter list csv (MSOA21CD). If omitted, process all UK MSOAs in API data.",
     )
     parser.add_argument("--msoa-geojson", type=Path, default=DEFAULT_MSOA_GEOJSON)
     parser.add_argument("--nts-csv", type=Path, default=DEFAULT_NTS_CSV)
