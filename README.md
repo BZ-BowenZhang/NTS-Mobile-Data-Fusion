@@ -17,6 +17,7 @@ Standard Python project for converting the notebook workflow into a reproducible
 - `data/raw/nts/nts9916.ods` (table `NTS9916a_trips_region` is parsed automatically)
 - Optional MSOA filter list: `data/raw/lookups/region_MSOACDs.csv`
 - Optional MSOA-to-region lookup: `data/raw/lookups/msoa_to_region.csv` with columns `MSOA21CD` and `Region of residence`
+  - If this file exists at the default path above, CLI will auto-use it.
 
 This repo currently provides symlinks from these paths to your existing source files.
 

@@ -7,6 +7,7 @@ from pathlib import Path
 DEFAULT_BT_PARQUET = Path("data/raw/bt_api/bt_modal_share_All_UK_MSOA_2024_09_2025_09.parquet")
 DEFAULT_MSOA_GEOJSON = Path("data/raw/geo/Middle_layer_Super_Output_Areas_December_2021_Boundaries_EW_BGC_V3_4916445166053426.geojson")
 DEFAULT_NTS_FILE = Path("data/raw/nts/nts9916.ods")
+DEFAULT_MSOA_REGION_LOOKUP = Path("data/raw/lookups/msoa_to_region.csv")
 DEFAULT_ADJUSTED_PARQUET = Path("data/processed/reassign/trips_adjusted.parquet")
 DEFAULT_OUTPUTS_ROOT = Path("outputs")
 DEFAULT_LEGACY_OUTPUT_ROOT = Path("output")

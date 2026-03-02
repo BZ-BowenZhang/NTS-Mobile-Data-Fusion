@@ -176,6 +176,8 @@ def build_nts_mode_shares_by_region(nts_df: pd.DataFrame, year: int) -> pd.DataF
     nts["Year"] = nts["Year"].astype(str).str.strip()
     nts = nts[nts["Year"].map(lambda x: _year_label_matches(x, year))].copy()
     nts = nts[nts["Trip length"].astype(str).str.strip().ne("All lengths")].copy()
+    nts["Region of residence"] = nts["Region of residence"].map(normalize_region_name)
+    nts = nts.dropna(subset=["Region of residence"])
 
     for col in NTS_MODE_COLS:
         nts[col] = pd.to_numeric(nts[col], errors="coerce")
@@ -296,15 +298,13 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     )
 
     cent_o = cent.rename(columns={"MSOA21CD": "origin_msoa", "x": "ox", "y": "oy"})
-    cent_d = cent.rename(
-        columns={"MSOA21CD": "destination_msoa", "x": "dx", "y": "dy", "origin_region": "destination_region"}
-    )
+    cent_d = cent[["MSOA21CD", "x", "y"]].rename(columns={"MSOA21CD": "destination_msoa", "x": "dx", "y": "dy"})
     trips_dd = trips_dd.merge(cent_o, on="origin_msoa", how="left")
     trips_dd = trips_dd.merge(cent_d, on="destination_msoa", how="left")
 
     meta = trips_dd._meta.assign(distance_m=np.float32(), distance_miles=np.float32())
     trips_dd = trips_dd.map_partitions(_add_distances, meta=meta)
-    trips_dd = trips_dd.drop(columns=["ox", "oy", "dx", "dy", "destination_region"])
+    trips_dd = trips_dd.drop(columns=["ox", "oy", "dx", "dy"])
     if config.region is not None:
         trips_dd["origin_region"] = trips_dd["origin_region"].fillna(config.region)
 
@@ -313,8 +313,10 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     nts_df = load_nts_trips_region(config.nts_file)
     labels = [x for x in nts_df["Trip length"].dropna().astype(str).str.strip().unique().tolist() if x != "All lengths"]
     trips_dd = add_distance_bands(trips_dd, labels)
+    trips_dd["distance_band"] = trips_dd["distance_band"].astype(str)
 
     nts_band_mode = build_nts_mode_shares_by_region(nts_df, year=config.year)
+    nts_band_mode["distance_band"] = nts_band_mode["distance_band"].astype(str)
     factors = calculate_factors(trips_dd, nts_band_mode, config.factor_min, config.factor_max)
 
     trips_dd = trips_dd.merge(
@@ -367,5 +369,3 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(legacy_out)
 
     return config.adjusted_parquet
-    nts["Region of residence"] = nts["Region of residence"].map(normalize_region_name)
-    nts = nts.dropna(subset=["Region of residence"])

@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_LEGACY_OUTPUT_ROOT,
     DEFAULT_MODES,
     DEFAULT_MSOA_GEOJSON,
+    DEFAULT_MSOA_REGION_LOOKUP,
     DEFAULT_NTS_FILE,
     DEFAULT_OUTPUTS_ROOT,
     DEFAULT_REGION,
@@ -44,7 +45,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--msoa-region-lookup-path",
         type=Path,
         default=None,
-        help="Optional CSV mapping MSOA21CD to NTS region name (Region of residence).",
+        help=(
+            "Optional CSV mapping MSOA21CD to NTS region name (Region of residence). "
+            f"If omitted and {DEFAULT_MSOA_REGION_LOOKUP} exists, it will be used automatically."
+        ),
     )
     parser.add_argument("--nts-file", "--nts-csv", dest="nts_file", type=Path, default=DEFAULT_NTS_FILE)
     parser.add_argument("--adjusted-parquet", type=Path, default=DEFAULT_ADJUSTED_PARQUET)
@@ -96,12 +100,14 @@ def _modes_from_arg(arg: str) -> tuple[str, ...]:
 def main() -> None:
     args = build_parser().parse_args()
     legacy_root = args.legacy_output_root if args.legacy_output else None
+    auto_region_lookup = DEFAULT_MSOA_REGION_LOOKUP if DEFAULT_MSOA_REGION_LOOKUP.exists() else None
+    region_lookup = args.msoa_region_lookup_path or auto_region_lookup
 
     if args.command in {"run", "reassign"}:
         reassign_cfg = ReassignConfig(
             bt_parquet=args.bt_parquet,
             msoa_filter_csv=args.msoa_filter_list,
-            msoa_region_lookup_csv=args.msoa_region_lookup_path,
+            msoa_region_lookup_csv=region_lookup,
             msoa_geojson=args.msoa_geojson,
             nts_file=args.nts_file,
             adjusted_parquet=args.adjusted_parquet,
