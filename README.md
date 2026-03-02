@@ -56,6 +56,35 @@ The reassignment stage now matches NTS shares by:
 - selected `--year` (including `YYYY to YYYY` rows in NTS)
 - the NTS region of each `origin_msoa`
 
+## Build `msoa_to_region.csv`
+
+If you have an official lookup file that already contains both `MSOA21CD` and a region name column
+(for example `Region of residence` or `RGN21NM`):
+
+```bash
+python scripts/build_msoa_to_region_lookup.py \
+  --msoa-lookup-csv /path/to/official_msoa_lookup.csv \
+  --output-csv data/raw/lookups/msoa_to_region.csv
+```
+
+If your MSOA lookup has LAD codes only (for example `LAD22CD`), pass a second LAD-to-region lookup:
+
+```bash
+python scripts/build_msoa_to_region_lookup.py \
+  --msoa-lookup-csv /path/to/msoa_to_lad_lookup.csv \
+  --lad-region-lookup-csv /path/to/lad_to_region_lookup.csv \
+  --output-csv data/raw/lookups/msoa_to_region.csv
+```
+
+Using your downloaded official files directly:
+
+```bash
+python scripts/build_msoa_to_region_lookup.py \
+  --msoa-lookup-csv "/Users/bowenzhang/Downloads/MSOA_(2011)_to_MSOA_(2021)_to_Local_Authority_District_(2022)_Exact_Fit_Lookup_for_EW_(V2).csv" \
+  --lad-region-lookup-csv "/Users/bowenzhang/Downloads/lasregionew2021lookup.xlsx" \
+  --output-csv data/raw/lookups/msoa_to_region.csv
+```
+
 Run only reassignment:
 
 ```bash

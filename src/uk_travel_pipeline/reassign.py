@@ -66,6 +66,20 @@ REGION_COLUMN_CANDIDATES = [
     "region_name",
 ]
 
+REGION_NAME_NORMALIZATION = {
+    "east": "East of England",
+    "east of england": "East of England",
+    "north east": "North East",
+    "north west": "North West",
+    "yorkshire and the humber": "Yorkshire and The Humber",
+    "east midlands": "East Midlands",
+    "west midlands": "West Midlands",
+    "south east": "South East",
+    "south west": "South West",
+    "london": "London",
+    "wales": "Wales",
+}
+
 
 def _add_distances(pdf: pd.DataFrame) -> pd.DataFrame:
     dx = pdf["ox"].to_numpy() - pdf["dx"].to_numpy()
@@ -97,6 +111,16 @@ def add_distance_bands(trips_dd: dd.DataFrame, labels: list[str]) -> dd.DataFram
 def _clean_nts_column_name(col: str) -> str:
     clean = re.sub(r"\s*\[note [^\]]+\]", "", str(col), flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", clean).strip()
+
+
+def normalize_region_name(value: object) -> str | None:
+    if pd.isna(value):
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    key = re.sub(r"\s+", " ", raw).strip().lower()
+    return REGION_NAME_NORMALIZATION.get(key, raw)
 
 
 def _extract_nts_table_from_ods(path: Path) -> pd.DataFrame:
@@ -259,6 +283,7 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
 
     if region_col != "origin_region":
         msoa["origin_region"] = msoa[region_col]
+    msoa["origin_region"] = msoa["origin_region"].map(normalize_region_name)
 
     msoa["centroid"] = msoa.geometry.centroid
     cent = pd.DataFrame(
@@ -342,3 +367,5 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(legacy_out)
 
     return config.adjusted_parquet
+    nts["Region of residence"] = nts["Region of residence"].map(normalize_region_name)
+    nts = nts.dropna(subset=["Region of residence"])
