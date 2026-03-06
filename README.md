@@ -24,13 +24,13 @@ This repo currently provides symlinks from these paths to your existing source f
 ## Install
 
 ```bash
-pip install -e .
+python -m pip install -e .
 ```
 
 For tests:
 
 ```bash
-pip install -e .[dev]
+python -m pip install -e .[dev]
 ```
 
 ## CLI
@@ -56,6 +56,21 @@ uk-travel-pipeline run \
 The reassignment stage now matches NTS shares by:
 - selected `--year` (including `YYYY to YYYY` rows in NTS)
 - the NTS region of each `origin_msoa`
+
+For v0.2.0, reassignment also automatically estimates `volume_adj` by purpose using:
+- `pop_lad_gb/pop_lsoa_internal.csv`
+- `tfn_area_type_lsoa21.csv`
+- `OA21_LAD22_LSOA21_MSOA21...csv`
+- `mode_time_split_production_hb_fr_reg.csv`
+
+This writes:
+- `data/processed/reassign/trips_adjusted_by_purpose.parquet`
+
+Disable with:
+
+```bash
+uk-travel-pipeline run --skip-purpose-estimation
+```
 
 ## Build `msoa_to_region.csv`
 
@@ -111,3 +126,5 @@ uk-travel-pipeline run --legacy-output
 - `outputs/reassign/share_check.csv`
 - `outputs/matrices/typical_week_by_mode/OD_matrix_{MODE}_adjusted.csv`
 - `outputs/matrices/weekday_AMpeak_by_mode/OD_matrix_{MODE}_adjusted.csv`
+- `outputs/matrices/typical_week_by_mode/OD_matrix_{MODE}_adjusted_by_purpose{X}.csv`
+- `outputs/matrices/weekday_AMpeak_by_mode/OD_matrix_{MODE}_adjusted_by_purpose{X}.csv`

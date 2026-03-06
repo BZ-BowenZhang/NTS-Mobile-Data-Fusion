@@ -9,8 +9,16 @@ DEFAULT_MSOA_GEOJSON = Path("data/raw/geo/Middle_layer_Super_Output_Areas_Decemb
 DEFAULT_NTS_FILE = Path("data/raw/nts/nts9916.ods")
 DEFAULT_MSOA_REGION_LOOKUP = Path("data/raw/lookups/msoa_to_region.csv")
 DEFAULT_ADJUSTED_PARQUET = Path("data/processed/reassign/trips_adjusted.parquet")
+DEFAULT_PURPOSE_PARQUET = Path("data/processed/reassign/trips_adjusted_by_purpose.parquet")
 DEFAULT_OUTPUTS_ROOT = Path("outputs")
 DEFAULT_LEGACY_OUTPUT_ROOT = Path("output")
+DEFAULT_POP_LSOA_INTERNAL = Path("data/raw/trip_production_calculation_code/pop_lad_gb/pop_lsoa_internal.csv")
+DEFAULT_TFN_AREA_TYPE_LSOA = Path("data/raw/trip_production_calculation_code/tfn_area_type_lsoa21.csv")
+DEFAULT_LSOA_MSOA_LOOKUP = Path("data/raw/lookups/OA21_LAD22_LSOA21_MSOA21_LEP22_EN_LU_V2_6716459600479702985.csv")
+DEFAULT_NTS_MODE_TIME_SPLIT = (
+    Path("data/raw/trip_production_calculation_code/01202 - NTS Trip Rates v23.0/mode_time_split_production_hb_fr_reg.csv")
+)
+DEFAULT_PURPOSES_CSV = Path("data/raw/trip_production_calculation_code/01202 - NTS Trip Rates v23.0/data_definition/purposes.csv")
 
 DEFAULT_MODES = ("ROAD", "RAIL", "WALKING", "SUBWAY")
 DEFAULT_YEAR = 2024
@@ -27,6 +35,13 @@ class ReassignConfig:
     msoa_geojson: Path = DEFAULT_MSOA_GEOJSON
     nts_file: Path = DEFAULT_NTS_FILE
     adjusted_parquet: Path = DEFAULT_ADJUSTED_PARQUET
+    purpose_parquet: Path = DEFAULT_PURPOSE_PARQUET
+    pop_lsoa_internal_csv: Path = DEFAULT_POP_LSOA_INTERNAL
+    tfn_area_type_lsoa_csv: Path = DEFAULT_TFN_AREA_TYPE_LSOA
+    lsoa_msoa_lookup_csv: Path = DEFAULT_LSOA_MSOA_LOOKUP
+    nts_mode_time_split_csv: Path = DEFAULT_NTS_MODE_TIME_SPLIT
+    purposes_csv: Path = DEFAULT_PURPOSES_CSV
+    estimate_purpose: bool = True
     outputs_root: Path = DEFAULT_OUTPUTS_ROOT
     year: int = DEFAULT_YEAR
     region: str | None = DEFAULT_REGION
@@ -37,6 +52,7 @@ class ReassignConfig:
 @dataclass(frozen=True)
 class MatrixConfig:
     adjusted_parquet: Path = DEFAULT_ADJUSTED_PARQUET
+    purpose_parquet: Path | None = DEFAULT_PURPOSE_PARQUET
     outputs_root: Path = DEFAULT_OUTPUTS_ROOT
     modes: tuple[str, ...] = DEFAULT_MODES
 

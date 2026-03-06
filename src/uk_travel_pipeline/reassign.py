@@ -10,6 +10,7 @@ import pandas as pd
 
 from .config import ReassignConfig
 from .io import assert_dataframe_columns, assert_dask_columns, assert_files_exist, ensure_dir, ensure_parent, write_csv
+from .purpose import run_purpose_estimation
 
 MILE_IN_M = 1609.344
 
@@ -362,6 +363,9 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
 
     ensure_parent(config.adjusted_parquet)
     trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(config.adjusted_parquet)
+
+    if config.estimate_purpose:
+        run_purpose_estimation(config, adjusted_parquet=config.adjusted_parquet)
 
     if legacy_output_root is not None:
         legacy_out = legacy_output_root / "trips_adjusted.parquet"
