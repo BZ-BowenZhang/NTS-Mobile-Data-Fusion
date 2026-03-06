@@ -314,10 +314,10 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     nts_df = load_nts_trips_region(config.nts_file)
     labels = [x for x in nts_df["Trip length"].dropna().astype(str).str.strip().unique().tolist() if x != "All lengths"]
     trips_dd = add_distance_bands(trips_dd, labels)
-    trips_dd["distance_band"] = trips_dd["distance_band"].astype(str)
+    trips_dd["distance_band"] = trips_dd["distance_band"].astype("string")
 
     nts_band_mode = build_nts_mode_shares_by_region(nts_df, year=config.year)
-    nts_band_mode["distance_band"] = nts_band_mode["distance_band"].astype(str)
+    nts_band_mode["distance_band"] = nts_band_mode["distance_band"].astype("string")
     factors = calculate_factors(trips_dd, nts_band_mode, config.factor_min, config.factor_max)
 
     trips_dd = trips_dd.merge(

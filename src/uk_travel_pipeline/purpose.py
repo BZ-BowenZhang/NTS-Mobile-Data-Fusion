@@ -41,6 +41,7 @@ def _bt_period_key(pdf: pd.DataFrame) -> pd.DataFrame:
     out["period_key"] = out["time_period"].map(weekday_map)
     out.loc[out["weekend_flag"] == 1, "period_key"] = "weekend"
     out["period_key"] = out["period_key"].fillna("weekday_offpeak")
+    out["period_key"] = out["period_key"].astype("string")
     return out
 
 
@@ -91,6 +92,8 @@ def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
     nts_with_pop["mode_of_transport"] = nts_with_pop["mode"].astype(int).map(NTS_MODE_TO_BT)
     nts_with_pop["period_key"] = nts_with_pop["period"].astype(int).map(NTS_PERIOD_TO_KEY)
     nts_with_pop = nts_with_pop.dropna(subset=["mode_of_transport", "period_key"])
+    nts_with_pop["mode_of_transport"] = nts_with_pop["mode_of_transport"].astype("string")
+    nts_with_pop["period_key"] = nts_with_pop["period_key"].astype("string")
 
     purpose_weights = (
         nts_with_pop.groupby(["MSOA21CD", "mode_of_transport", "period_key", "purpose"], as_index=False)["trip_rho"].sum()
@@ -106,6 +109,10 @@ def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
     out = purpose_weights.merge(purposes[["purpose", "purpose_desc"]], on="purpose", how="left")
     out["purpose"] = out["purpose"].astype("int16")
     out["purpose_share"] = pd.to_numeric(out["purpose_share"], errors="coerce").fillna(0.0)
+    out["MSOA21CD"] = out["MSOA21CD"].astype("string")
+    out["mode_of_transport"] = out["mode_of_transport"].astype("string")
+    out["period_key"] = out["period_key"].astype("string")
+    out["purpose_desc"] = out["purpose_desc"].astype("string")
     return out[["MSOA21CD", "mode_of_transport", "period_key", "purpose", "purpose_desc", "purpose_share"]]
 
 
@@ -122,6 +129,7 @@ def run_purpose_estimation(config: ReassignConfig, adjusted_parquet: Path | None
         ]
     )
     shares = build_msoa_purpose_shares(config).rename(columns={"MSOA21CD": "origin_msoa"})
+    valid_msoa = shares["origin_msoa"].dropna().astype("string").unique().tolist()
 
     trips_dd = dd.read_parquet(adjusted)
     if "volume_adj" in trips_dd.columns:
@@ -131,16 +139,28 @@ def run_purpose_estimation(config: ReassignConfig, adjusted_parquet: Path | None
     else:
         raise ValueError("Adjusted parquet must contain `volume_adj` or `volume`.")
 
-    trips_dd = trips_dd.map_partitions(_bt_period_key, meta=trips_dd._meta.assign(period_key=""))
+    period_meta = trips_dd._meta.assign(period_key=pd.Series([], dtype="string"))
+    trips_dd = trips_dd.map_partitions(_bt_period_key, meta=period_meta)
+    trips_dd["origin_msoa"] = trips_dd["origin_msoa"].astype("string")
+    trips_dd["destination_msoa"] = trips_dd["destination_msoa"].astype("string")
+    trips_dd["mode_of_transport"] = trips_dd["mode_of_transport"].astype("string")
+    trips_dd["period_key"] = trips_dd["period_key"].astype("string")
+    # Keep purpose outputs for origins inside the MSOA universe represented by population inputs.
+    # Destination can be any MSOA.
+    trips_dd = trips_dd[trips_dd["origin_msoa"].isin(valid_msoa)]
+    shares["origin_msoa"] = shares["origin_msoa"].astype("string")
+    shares["mode_of_transport"] = shares["mode_of_transport"].astype("string")
+    shares["period_key"] = shares["period_key"].astype("string")
     out_dd = trips_dd.merge(
         shares,
         on=["origin_msoa", "mode_of_transport", "period_key"],
-        how="left",
+        how="inner",
     )
-    out_dd["purpose"] = out_dd["purpose"].fillna(0).astype("int16")
-    out_dd["purpose_desc"] = out_dd["purpose_desc"].fillna("Unknown")
-    out_dd["purpose_share"] = out_dd["purpose_share"].fillna(1.0)
+    out_dd["purpose"] = out_dd["purpose"].astype("int16")
+    out_dd["purpose_desc"] = out_dd["purpose_desc"].astype("string")
+    out_dd["purpose_share"] = out_dd["purpose_share"].astype("float64")
     out_dd["volume_adj_purpose"] = out_dd["volume_adj"] * out_dd["purpose_share"]
+    out_dd["period_key"] = out_dd["period_key"].astype("string")
 
     ensure_parent(config.purpose_parquet)
     out_dd.to_parquet(config.purpose_parquet)
