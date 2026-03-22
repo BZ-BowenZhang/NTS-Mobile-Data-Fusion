@@ -41,6 +41,17 @@ NTS_MODE_COLS = [
     "Other public transport",
 ]
 
+NTS_ROAD_SPLIT_COLS = [
+    "Pedal cycle",
+    "Car or van driver",
+    "Car or van passenger",
+    "Motorcycle",
+    "Other private transport",
+    "Bus in London",
+    "Other local bus",
+    "Non-local bus",
+]
+
 NTS_TO_BT = {
     "Walk": "WALKING",
     "Pedal cycle": "ROAD",
@@ -80,6 +91,28 @@ REGION_NAME_NORMALIZATION = {
     "london": "London",
     "wales": "Wales",
 }
+
+
+def _split_road_modes_partition(pdf: pd.DataFrame, road_shares: pd.DataFrame) -> pd.DataFrame:
+    if pdf.empty:
+        return pdf
+
+    road = pdf[pdf["mode_of_transport"] == "ROAD"].copy()
+    if road.empty:
+        return pdf
+
+    non_road = pdf[pdf["mode_of_transport"] != "ROAD"].copy()
+    road_split = road.merge(road_shares, on=["origin_region", "distance_band"], how="left")
+    road_split["road_mode"] = road_split["road_mode"].fillna("PRIVATE_CAR")
+    road_split["road_share"] = pd.to_numeric(road_split["road_share"], errors="coerce").fillna(1.0)
+    road_split = road_split[road_split["road_share"] > 0].copy()
+    road_split["mode_of_transport"] = road_split["road_mode"]
+    road_split["volume"] = pd.to_numeric(road_split["volume"], errors="coerce").fillna(0.0) * road_split["road_share"]
+    road_split["volume_adj"] = (
+        pd.to_numeric(road_split["volume_adj"], errors="coerce").fillna(0.0) * road_split["road_share"]
+    )
+    road_split = road_split.drop(columns=["road_mode", "road_share"])
+    return pd.concat([non_road, road_split], ignore_index=True)
 
 
 def _add_distances(pdf: pd.DataFrame) -> pd.DataFrame:
@@ -200,6 +233,47 @@ def build_nts_mode_shares_by_region(nts_df: pd.DataFrame, year: int) -> pd.DataF
     return nts_bt[["origin_region", "distance_band", "bt_mode", "nts_share"]]
 
 
+def build_road_split_shares_by_region(nts_df: pd.DataFrame, year: int) -> pd.DataFrame:
+    required = ["Year", "Trip length", "Region of residence"] + NTS_ROAD_SPLIT_COLS
+    assert_dataframe_columns(nts_df, required, "NTS file")
+    nts = nts_df.copy()
+    nts["Year"] = nts["Year"].astype(str).str.strip()
+    nts = nts[nts["Year"].map(lambda x: _year_label_matches(x, year))].copy()
+    nts = nts[nts["Trip length"].astype(str).str.strip().ne("All lengths")].copy()
+    nts["Region of residence"] = nts["Region of residence"].map(normalize_region_name)
+    nts = nts.dropna(subset=["Region of residence"])
+
+    for col in NTS_ROAD_SPLIT_COLS:
+        nts[col] = pd.to_numeric(nts[col], errors="coerce").fillna(0.0)
+
+    nts["CYCLE"] = nts["Pedal cycle"]
+    nts["PRIVATE_CAR"] = (
+        nts["Car or van driver"] + nts["Car or van passenger"] + nts["Other private transport"]
+    )
+    nts["MOTORCYCLE"] = nts["Motorcycle"]
+    nts["BUS"] = nts["Bus in London"] + nts["Other local bus"] + nts["Non-local bus"]
+
+    road = nts[["Region of residence", "Trip length", "CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS"]].rename(
+        columns={"Region of residence": "origin_region", "Trip length": "distance_band"}
+    )
+    long = road.melt(
+        id_vars=["origin_region", "distance_band"],
+        value_vars=["CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS"],
+        var_name="road_mode",
+        value_name="road_volume",
+    )
+    out = long.groupby(["origin_region", "distance_band", "road_mode"], as_index=False)["road_volume"].sum()
+    out["group_total"] = out.groupby(["origin_region", "distance_band"])["road_volume"].transform("sum")
+    out["road_share"] = out["road_volume"] / out["group_total"].replace(0, np.nan)
+    out["road_share"] = out["road_share"].fillna(0.0)
+    # Fallback when no road split signal exists: keep all ROAD in PRIVATE_CAR.
+    zero_mask = out["group_total"] == 0
+    out.loc[zero_mask, "road_share"] = 0.0
+    out.loc[zero_mask & (out["road_mode"] == "PRIVATE_CAR"), "road_share"] = 1.0
+    out = out.drop(columns=["group_total"])
+    return out[["origin_region", "distance_band", "road_mode", "road_share"]]
+
+
 def calculate_factors(
     trips_dd: dd.DataFrame, nts_band_mode: pd.DataFrame, factor_min: float, factor_max: float
 ) -> pd.DataFrame:
@@ -231,7 +305,7 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         required_files.append(config.msoa_region_lookup_csv)
     assert_files_exist(required_files)
 
-    all_trips_dd = dd.read_parquet(config.bt_parquet, columns=BT_REQUIRED_COLUMNS)
+    all_trips_dd = dd.read_parquet(config.bt_parquet, columns=BT_REQUIRED_COLUMNS, split_row_groups=True)
     assert_dask_columns(all_trips_dd, BT_REQUIRED_COLUMNS, "BT parquet")
 
     if config.msoa_filter_csv is not None:
@@ -329,6 +403,37 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     trips_dd["volume_adj"] = (trips_dd["volume"] * trips_dd["factor"]).round().astype("int64")
     trips_dd = trips_dd.rename(columns={"factor": "adj_factor"})
 
+    if config.split_road_mode:
+        # Increase partition count before row expansion to reduce peak per-partition memory.
+        target_parts = max(trips_dd.npartitions, 48)
+        trips_dd = trips_dd.repartition(npartitions=target_parts)
+        road_shares = build_road_split_shares_by_region(nts_df, year=config.year)
+        road_shares["origin_region"] = road_shares["origin_region"].astype("string")
+        road_shares["distance_band"] = road_shares["distance_band"].astype("string")
+        road_total_before = (
+            dd.to_numeric(trips_dd[trips_dd["mode_of_transport"] == "ROAD"]["volume_adj"], errors="coerce")
+            .fillna(0.0)
+            .sum()
+            .compute()
+        )
+        split_meta = trips_dd._meta.copy()
+        split_meta["volume"] = split_meta["volume"].astype("float64")
+        split_meta["volume_adj"] = split_meta["volume_adj"].astype("float64")
+        trips_dd = trips_dd.map_partitions(_split_road_modes_partition, road_shares=road_shares, meta=split_meta)
+        road_total_after = (
+            dd.to_numeric(
+                trips_dd[trips_dd["mode_of_transport"].isin(["CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS"])]["volume_adj"],
+                errors="coerce",
+            )
+            .fillna(0.0)
+            .sum()
+            .compute()
+        )
+        if not np.isclose(road_total_after, road_total_before, rtol=1e-10, atol=1e-6):
+            raise ValueError(
+                "ROAD split conservation check failed: sum(split ROAD volume_adj) != pre-split ROAD volume_adj."
+            )
+
     check = (
         trips_dd.groupby(["origin_region", "distance_band", "mode_of_transport"])[["volume", "volume_adj"]]
         .sum()
@@ -362,9 +467,11 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     )
 
     ensure_parent(config.adjusted_parquet)
+    print(f"[reassign] writing adjusted parquet -> {config.adjusted_parquet}")
     trips_dd.drop(columns=["distance_m", "distance_band"]).to_parquet(config.adjusted_parquet)
 
     if config.estimate_purpose:
+        print(f"[reassign] estimating purpose volumes -> {config.purpose_parquet}")
         run_purpose_estimation(config, adjusted_parquet=config.adjusted_parquet)
 
     if legacy_output_root is not None:

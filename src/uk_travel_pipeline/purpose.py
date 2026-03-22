@@ -10,16 +10,6 @@ from .io import assert_files_exist, ensure_parent
 
 ID_COLS = ["gender_3", "ns_sec", "soc", "aws", "hh_type"]
 
-NTS_MODE_TO_BT = {
-    1: "WALKING",
-    2: "ROAD",
-    3: "ROAD",
-    4: "ROAD",
-    5: "ROAD",
-    6: "RAIL",
-    7: "SUBWAY",
-}
-
 NTS_PERIOD_TO_KEY = {
     1: "weekday_AM",
     2: "weekday_inter",
@@ -28,6 +18,28 @@ NTS_PERIOD_TO_KEY = {
     5: "weekend",
     6: "weekend",
 }
+
+
+def _mode_mapping(split_road_mode: bool) -> dict[int, str]:
+    if split_road_mode:
+        return {
+            1: "WALKING",
+            2: "CYCLE",
+            3: "PRIVATE_CAR",
+            4: "PRIVATE_CAR",
+            5: "BUS",
+            6: "RAIL",
+            7: "SUBWAY",
+        }
+    return {
+        1: "WALKING",
+        2: "ROAD",
+        3: "ROAD",
+        4: "ROAD",
+        5: "ROAD",
+        6: "RAIL",
+        7: "SUBWAY",
+    }
 
 
 def _bt_period_key(pdf: pd.DataFrame) -> pd.DataFrame:
@@ -89,7 +101,7 @@ def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
     )
     nts_with_pop = nts_with_pop.dropna(subset=["rho", "mode", "period", "purpose", "MSOA21CD"])
     nts_with_pop["trip_rho"] = nts_with_pop["rho"] * nts_with_pop["pop"]
-    nts_with_pop["mode_of_transport"] = nts_with_pop["mode"].astype(int).map(NTS_MODE_TO_BT)
+    nts_with_pop["mode_of_transport"] = nts_with_pop["mode"].astype(int).map(_mode_mapping(config.split_road_mode))
     nts_with_pop["period_key"] = nts_with_pop["period"].astype(int).map(NTS_PERIOD_TO_KEY)
     nts_with_pop = nts_with_pop.dropna(subset=["mode_of_transport", "period_key"])
     nts_with_pop["mode_of_transport"] = nts_with_pop["mode_of_transport"].astype("string")
@@ -129,9 +141,8 @@ def run_purpose_estimation(config: ReassignConfig, adjusted_parquet: Path | None
         ]
     )
     shares = build_msoa_purpose_shares(config).rename(columns={"MSOA21CD": "origin_msoa"})
-    valid_msoa = shares["origin_msoa"].dropna().astype("string").unique().tolist()
 
-    trips_dd = dd.read_parquet(adjusted)
+    trips_dd = dd.read_parquet(adjusted, split_row_groups=True)
     if "volume_adj" in trips_dd.columns:
         trips_dd["volume_adj"] = dd.to_numeric(trips_dd["volume_adj"], errors="coerce").fillna(0.0)
     elif "volume" in trips_dd.columns:
@@ -139,15 +150,24 @@ def run_purpose_estimation(config: ReassignConfig, adjusted_parquet: Path | None
     else:
         raise ValueError("Adjusted parquet must contain `volume_adj` or `volume`.")
 
+    # Pre-aggregate adjusted trips before purpose allocation to avoid large row expansion
+    # (especially when ROAD mode has already been split into sub-modes).
+    agg_keys = [
+        "origin_msoa",
+        "destination_msoa",
+        "mode_of_transport",
+        "time_period",
+        "weekend_flag",
+        "days_used",
+    ]
+    trips_dd = trips_dd.groupby(agg_keys)["volume_adj"].sum().reset_index()
+
     period_meta = trips_dd._meta.assign(period_key=pd.Series([], dtype="string"))
     trips_dd = trips_dd.map_partitions(_bt_period_key, meta=period_meta)
     trips_dd["origin_msoa"] = trips_dd["origin_msoa"].astype("string")
     trips_dd["destination_msoa"] = trips_dd["destination_msoa"].astype("string")
     trips_dd["mode_of_transport"] = trips_dd["mode_of_transport"].astype("string")
     trips_dd["period_key"] = trips_dd["period_key"].astype("string")
-    # Keep purpose outputs for origins inside the MSOA universe represented by population inputs.
-    # Destination can be any MSOA.
-    trips_dd = trips_dd[trips_dd["origin_msoa"].isin(valid_msoa)]
     shares["origin_msoa"] = shares["origin_msoa"].astype("string")
     shares["mode_of_transport"] = shares["mode_of_transport"].astype("string")
     shares["period_key"] = shares["period_key"].astype("string")
