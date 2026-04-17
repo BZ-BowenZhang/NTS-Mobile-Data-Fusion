@@ -46,18 +46,12 @@
 </div>
 <div class="grid">
   <div class="card full">
-    <h2>Mode Split: Before vs After Adjustment</h2>
-    <p class="subtitle">Each bar sums to 100% — share of total trips by mode</p>
+    <h2>Mode Share: Before vs After Adjustment</h2>
+    <p class="subtitle">Grouped by transport mode — NTS target shown where available</p>
     <canvas id="shareChart"></canvas>
-    <p class="legend-note">Hover a segment for exact %. &nbsp;BT Before = original split &nbsp;|&nbsp; BT After = NTS-adjusted split</p>
+    <p class="legend-note" id="shareNote">BT Before = original BT share &nbsp;|&nbsp; BT After = NTS-adjusted share &nbsp;|&nbsp; NTS Target = observed NTS share</p>
   </div>
-  <div class="card">
-    <h2>NTS Target vs BT After</h2>
-    <p class="subtitle">Modes with NTS targets — BT After should closely match NTS Target</p>
-    <canvas id="ntsChart"></canvas>
-    <p class="legend-note" id="ntsNote"></p>
-  </div>
-  <div class="card">
+  <div class="card full">
     <h2>Adjustment Factors by Mode Group</h2>
     <p class="subtitle">Factor applied to each mode group (RAIL / ROAD / WALKING / SUBWAY)</p>
     <canvas id="factorChart"></canvas>
@@ -614,7 +608,7 @@ modes.forEach(m => { const o=document.createElement('option'); o.value=m; o.text
 selMode.value = 'PRIVATE_CAR';
 
 // ── Chart instances ───────────────────────────────────────────────────────────
-let shareChart, ntsChart, factorChart, bandChart;
+let shareChart, factorChart, bandChart;
 
 function getFiltered() {
   const region = selRegion.value;
@@ -635,117 +629,87 @@ function bandTotals(rows) {
   return { before, after };
 }
 
-// Chart 1: stacked mode split before / after
+// Chart 1: grouped mode share — BT Before, BT After, NTS Target (per mode)
 function drawShareChart() {
-  const filtered = getFiltered();
+  const filtered   = getFiltered();
+  const isAllBands = selBand.value === 'All Bands';
+  const { after: aTotals } = bandTotals(
+    shareData.filter(d => d.origin_region === selRegion.value)
+  );
+
   const byMode = {};
   filtered.forEach(d => {
     const m = d.bt_mode;
-    if (!byMode[m]) byMode[m] = { vol:0, vol_adj:0 };
+    if (!byMode[m]) byMode[m] = { vol:0, vol_adj:0, ntsRows:[] };
     byMode[m].vol     += parseFloat(d.volume)     || 0;
     byMode[m].vol_adj += parseFloat(d.volume_adj) || 0;
+    if (d.nts_share !== '' && !isNaN(parseFloat(d.nts_share))) {
+      byMode[m].ntsRows.push(d);
+    }
   });
+
   const totalBefore = Object.values(byMode).reduce((s,v) => s + v.vol,     0);
   const totalAfter  = Object.values(byMode).reduce((s,v) => s + v.vol_adj, 0);
   const modeList    = modes.filter(m => byMode[m]);
 
-  // One dataset per mode: [before_share, after_share]
-  const datasets = modeList.map(m => ({
-    label: m,
-    data: [
-      totalBefore ? +(byMode[m].vol     / totalBefore * 100).toFixed(3) : 0,
-      totalAfter  ? +(byMode[m].vol_adj / totalAfter  * 100).toFixed(3) : 0,
-    ],
-    backgroundColor: MODE_COLORS[m] || '#888',
-    borderColor: 'rgba(255,255,255,0.4)',
-    borderWidth: 0.5,
-  }));
+  const beforeVals = modeList.map(m =>
+    totalBefore ? +(byMode[m].vol / totalBefore * 100).toFixed(3) : 0);
+  const afterVals  = modeList.map(m =>
+    totalAfter  ? +(byMode[m].vol_adj / totalAfter * 100).toFixed(3) : 0);
+
+  // NTS target on same denominator as BT After:
+  //   single band → nts_share itself is the within-band share
+  //   all bands   → volume-weighted by aTotals so it aligns with BT After's base
+  const ntsVals = modeList.map(m => {
+    const rows = byMode[m].ntsRows;
+    if (!rows.length) return null;
+    if (!isAllBands) return +(parseFloat(rows[0].nts_share) * 100).toFixed(3);
+    let num = 0, den = 0;
+    rows.forEach(d => {
+      const w = aTotals[d.distance_band] || 0;
+      num += parseFloat(d.nts_share) * w;
+      den += w;
+    });
+    return den > 0 ? +(num / den * 100).toFixed(3) : null;
+  });
+
+  const colors = modeList.map(m => MODE_COLORS[m] || '#888');
+  const note = document.getElementById('shareNote');
+  if (note) {
+    note.textContent = isAllBands
+      ? 'NTS target shown as volume-weighted average across distance bands where NTS data exists.'
+      : `NTS target shown for ${selBand.value}.`;
+  }
 
   const ctx = document.getElementById('shareChart').getContext('2d');
   if (shareChart) shareChart.destroy();
   shareChart = new Chart(ctx, {
     type: 'bar',
-    data: { labels: ['BT Before', 'BT After'], datasets },
-    options: {
-      responsive: true, maintainAspectRatio: true,
-      plugins: {
-        legend: { position: 'right', labels: { font:{size:10}, boxWidth:12 } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%` } }
-      },
-      scales: {
-        x: { stacked: true },
-        y: { stacked: true, min: 0, max: 100,
-             title: { display: true, text: 'Mode Share (%)' },
-             ticks: { callback: v => `${v}%` } }
-      }
-    }
-  });
-}
-
-// Chart 1b: NTS target vs BT After (only modes with NTS data)
-function drawNtsChart() {
-  const filtered  = getFiltered();
-  const allInRegion = shareData.filter(d => d.origin_region === selRegion.value);
-  const { before: bTotals, after: aTotals } = bandTotals(allInRegion);
-  const totalAfterAll = Object.values(aTotals).reduce((s,v) => s+v, 0);
-  const totalAllTrips = Object.values(bTotals).reduce((s,v) => s+v, 0);
-
-  // Per-mode: BT After share (% of total) and volume-weighted NTS target
-  const results = [];
-  modes.forEach(m => {
-    const mRows = filtered.filter(d => d.bt_mode === m);
-    if (!mRows.length) return;
-    const vol_adj = mRows.reduce((s,d) => s + (parseFloat(d.volume_adj) || 0), 0);
-    const afterShare = totalAfterAll > 0 ? vol_adj / totalAfterAll * 100 : 0;
-
-    // Volume-weighted NTS: sum(nts_share * band_total_before) / total_all_trips
-    // This gives the NTS target as a fraction of all trips (same denominator as afterShare)
-    const ntsRows = mRows.filter(d => d.nts_share !== '');
-    if (!ntsRows.length) return;
-    const ntsWeighted = ntsRows.reduce((s,d) => {
-      const v = parseFloat(d.nts_share);
-      const w = bTotals[d.distance_band] || 0;
-      return s + (isNaN(v) ? 0 : v * w);
-    }, 0) / totalAllTrips * 100;
-    if (isNaN(ntsWeighted)) return;
-
-    results.push({ mode: m, after: +afterShare.toFixed(3), nts: +ntsWeighted.toFixed(3) });
-  });
-
-  const note = document.getElementById('ntsNote');
-  if (!results.length) {
-    note.textContent = 'No NTS targets available for the current selection.';
-    if (ntsChart) { ntsChart.destroy(); ntsChart = null; }
-    return;
-  }
-  note.textContent = selBand.value === 'All Bands'
-    ? 'NTS shown as volume-weighted average across all distance bands.'
-    : `NTS shown for ${selBand.value}.`;
-
-  const labels = results.map(r => r.mode);
-  const colors = labels.map(m => MODE_COLORS[m] || '#888');
-  const ctx = document.getElementById('ntsChart').getContext('2d');
-  if (ntsChart) ntsChart.destroy();
-  ntsChart = new Chart(ctx, {
-    type: 'bar',
     data: {
-      labels,
+      labels: modeList,
       datasets: [
-        { label: 'BT After (%)',   data: results.map(r => r.after),
-          backgroundColor: colors.map(c => c + 'bb'), borderColor: colors, borderWidth: 1.5 },
-        { label: 'NTS Target (%)', data: results.map(r => r.nts),
-          backgroundColor: '#2d374866', borderColor: '#2d3748', borderWidth: 1.5 },
+        { label: 'BT Before (%)',  data: beforeVals,
+          backgroundColor: colors.map(c => c + '55'), borderColor: colors, borderWidth: 1 },
+        { label: 'BT After (%)',   data: afterVals,
+          backgroundColor: colors.map(c => c + 'cc'), borderColor: colors, borderWidth: 1 },
+        { label: 'NTS Target (%)', data: ntsVals,
+          backgroundColor: '#2d3748cc', borderColor: '#2d3748', borderWidth: 1 },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: true,
       plugins: {
         legend: { position: 'top', labels: { font:{size:11} } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%` } }
+        tooltip: { callbacks: {
+          label: c => c.parsed.y == null
+            ? `${c.dataset.label}: n/a`
+            : `${c.dataset.label}: ${c.parsed.y.toFixed(2)}%`
+        } }
       },
       scales: {
         x: { ticks: { font:{size:11} } },
-        y: { title: { display: true, text: 'Mode Share (%)' }, ticks: { callback: v => `${v}%` } }
+        y: { beginAtZero: true, title: { display: true, text: 'Mode Share (%)' },
+             ticks: { callback: v => `${v}%` } }
       }
     }
   });
@@ -857,7 +821,7 @@ function drawBandChart() {
   });
 }
 
-function redrawAll() { drawShareChart(); drawNtsChart(); drawFactorChart(); drawBandChart(); }
+function redrawAll() { drawShareChart(); drawFactorChart(); drawBandChart(); }
 
 selRegion.addEventListener('change', redrawAll);
 selBand.addEventListener('change', redrawAll);
