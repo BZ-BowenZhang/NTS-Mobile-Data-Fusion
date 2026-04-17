@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OD Flow Map — EEH BT</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#1a202c;color:#e2e8f0;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+  /* ── Top bar ── */
+  header{background:#1a365d;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:1000;flex-shrink:0}
+  header h1{font-size:1rem;font-weight:600;white-space:nowrap}
+  header a{color:#90cdf4;font-size:0.78rem;text-decoration:none;white-space:nowrap}
+  header a:hover{text-decoration:underline}
+  .sep{width:1px;height:20px;background:#2d4a7a;flex-shrink:0}
+
+  /* ── Controls ── */
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1}
+  select,input[type=text]{background:#2d3748;color:#e2e8f0;border:1px solid #4a5568;border-radius:5px;padding:5px 8px;font-size:0.8rem}
+  select:focus,input:focus{outline:none;border-color:#63b3ed}
+  .btn{background:#3182ce;color:white;border:none;border-radius:5px;padding:5px 14px;font-size:0.8rem;font-weight:600;cursor:pointer;white-space:nowrap}
+  .btn:hover{background:#2c5282}
+  .btn:disabled{background:#4a5568;cursor:not-allowed}
+  .btn-clear{background:#4a5568}
+  .btn-clear:hover{background:#718096}
+
+  label{font-size:0.75rem;color:#a0aec0;white-space:nowrap}
+
+  /* ── Autocomplete ── */
+  .ac-wrap{position:relative}
+  .ac-list{position:absolute;top:100%;left:0;z-index:9999;background:#2d3748;border:1px solid #4a5568;border-radius:5px;max-height:200px;overflow-y:auto;min-width:200px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+  .ac-list div{padding:6px 10px;cursor:pointer;font-size:0.82rem}
+  .ac-list div:hover,.ac-list div.active{background:#3182ce22;color:#90cdf4}
+
+  /* ── Map ── */
+  #map{flex:1;z-index:1}
+
+  /* ── Side panel ── */
+  #panel{position:absolute;right:0;top:52px;bottom:0;width:280px;background:#1e2733cc;backdrop-filter:blur(6px);z-index:800;overflow-y:auto;padding:14px;border-left:1px solid #2d4a7a;display:flex;flex-direction:column;gap:10px}
+  #panel h2{font-size:0.85rem;font-weight:600;color:#90cdf4;border-bottom:1px solid #2d4a7a;padding-bottom:6px}
+  .stat-row{display:flex;justify-content:space-between;font-size:0.78rem;padding:3px 0;border-bottom:1px solid #2d3748}
+  .stat-val{font-weight:600;color:#63b3ed}
+  .flow-item{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid #2d3748;cursor:pointer}
+  .flow-item:hover{background:#2d374844}
+  .flow-msoa{font-size:0.75rem;font-weight:600;color:#e2e8f0}
+  .flow-name{font-size:0.72rem;color:#a0aec0}
+  .flow-bar-row{display:flex;align-items:center;gap:6px}
+  .flow-bar-bg{flex:1;background:#2d3748;border-radius:3px;height:6px;overflow:hidden}
+  .flow-bar-fill{height:100%;border-radius:3px}
+  .flow-val{font-size:0.72rem;color:#63b3ed;white-space:nowrap;min-width:60px;text-align:right}
+  .empty-msg{font-size:0.82rem;color:#718096;text-align:center;padding:20px 0}
+
+  /* ── Legend ── */
+  #legend{position:absolute;left:10px;bottom:28px;z-index:800;background:#1e2733dd;backdrop-filter:blur(4px);border-radius:8px;padding:10px 14px;font-size:0.75rem;border:1px solid #2d4a7a;min-width:160px}
+  #legend h3{font-size:0.78rem;font-weight:600;color:#90cdf4;margin-bottom:6px}
+  .leg-item{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .leg-line{height:3px;border-radius:2px}
+
+  /* ── Spinner ── */
+  .spinner{width:20px;height:20px;border:2px solid #4a5568;border-top-color:#63b3ed;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── Loading overlay ── */
+  #loadOverlay{position:absolute;inset:0;z-index:2000;background:#1a202cdd;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-size:0.9rem;color:#a0aec0}
+  #loadOverlay.hidden{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>OD Flow Map</h1>
+  <div class="sep"></div>
+  <div class="controls">
+    <div>
+      <label>Period</label><br>
+      <select id="selPeriod">
+        <option value="typical_week">Typical Week</option>
+        <option value="weekday_AMpeak">Weekday AM Peak</option>
+      </select>
+    </div>
+    <div>
+      <label>Mode</label><br>
+      <select id="selMode">
+        <option value="PRIVATE_CAR">Private Car</option>
+        <option value="BUS">Bus</option>
+        <option value="CYCLE">Cycle</option>
+        <option value="MOTORCYCLE">Motorcycle</option>
+        <option value="RAIL">Rail</option>
+        <option value="SUBWAY">Subway</option>
+        <option value="WALKING">Walking</option>
+      </select>
+    </div>
+    <div>
+      <label>Purpose</label><br>
+      <select id="selPurpose">
+        <option value="0">All purposes</option>
+        <option value="1">1 – Commuting</option>
+        <option value="2">2 – Employer Business</option>
+        <option value="3">3 – Education</option>
+        <option value="4">4 – Shopping</option>
+        <option value="5">5 – Personal Business</option>
+        <option value="6">6 – Social/leisure</option>
+        <option value="7">7 – Visit families and friends</option>
+        <option value="8">8 – Holiday/day trip</option>
+      </select>
+    </div>
+    <div>
+      <label>Top N flows</label><br>
+      <select id="selN">
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+    <div class="ac-wrap">
+      <label>Origin MSOA (type or click map)</label><br>
+      <input id="inOrigin" type="text" placeholder="e.g. E02000001" autocomplete="off" style="width:160px">
+      <div class="ac-list" id="acList" style="display:none"></div>
+    </div>
+    <button class="btn" id="btnShow">Show flows</button>
+    <button class="btn btn-clear" id="btnClear">Clear</button>
+  </div>
+  <div class="sep"></div>
+  <a href="/">Dashboard</a>
+  <a href="/od">OD Tool</a>
+</header>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h2>Flow Summary</h2>
+  <div id="panelContent"><div class="empty-msg">Select an origin MSOA to see top flows</div></div>
+</div>
+
+<div id="legend">
+  <h3>Flow line width</h3>
+  <div id="legendItems"></div>
+  <div style="margin-top:8px;font-size:0.72rem;color:#718096">Click a dot to set as origin</div>
+</div>
+
+<div id="loadOverlay">
+  <div class="spinner"></div>
+  <div id="loadMsg">Loading MSOA centroids…</div>
+</div>
+
+<script>
+// ── Map setup ─────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true }).setView([52.5, -1.5], 6);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap © CARTO',
+  subdomains: 'abcd', maxZoom: 19
+}).addTo(map);
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let centroidsData = [];           // [{code, name, lat, lon}]
+let centroidMap   = {};           // code -> {name,lat,lon}
+let dotLayer      = null;
+let flowLayer     = L.layerGroup().addTo(map);
+let originMarker  = null;
+let currentOrigin = null;
+
+const MODE_COLORS = {
+  PRIVATE_CAR: '#f56565', BUS: '#4299e1', CYCLE: '#48bb78',
+  MOTORCYCLE: '#ed8936', RAIL: '#9f7aea', SUBWAY: '#ed64a6', WALKING: '#38b2ac'
+};
+
+function getSelectedPurposeLabel() {
+  const sel = document.getElementById('selPurpose');
+  const opt = sel && sel.options[sel.selectedIndex];
+  return opt ? opt.text : 'All purposes';
+}
+
+async function loadPurposes() {
+  const select = document.getElementById('selPurpose');
+  const current = select.value;
+  try {
+    const r = await fetch('/api/purposes');
+    const d = await r.json();
+    const purposes = Array.isArray(d.purposes) ? d.purposes : [];
+    if (!purposes.length) return;
+    select.innerHTML = purposes.map(p => {
+      const label = p.value === 0 ? 'All purposes' : `${p.value} – ${p.label}`;
+      return `<option value="${p.value}">${label}</option>`;
+    }).join('');
+    select.value = current;
+  } catch(e) {
+    // Keep the built-in fallback options if the lookup cannot be fetched.
+  }
+}
+
+// ── Load centroids ────────────────────────────────────────────────────────────
+async function loadCentroids() {
+  setOverlay(true, 'Loading MSOA centroids…');
+  try {
+    const r = await fetch('/api/centroids');
+    const d = await r.json();
+    centroidsData = d.centroids;
+    centroidsData.forEach(c => { centroidMap[c.code] = c; });
+    renderDots();
+    setupAutocomplete();
+    setOverlay(false);
+  } catch(e) {
+    setOverlay(true, 'Error loading centroids — is the server running?');
+  }
+}
+
+// ── Render all MSOA dots ──────────────────────────────────────────────────────
+function renderDots() {
+  if (dotLayer) map.removeLayer(dotLayer);
+  const markers = [];
+  centroidsData.forEach(c => {
+    const m = L.circleMarker([c.lat, c.lon], {
+      radius: 3, color: '#4a6fa5', fillColor: '#4a6fa5',
+      fillOpacity: 0.5, weight: 0.5
+    });
+    m.on('click', () => {
+      document.getElementById('inOrigin').value = c.code;
+      fetchFlows(c.code);
+    });
+    m.bindTooltip(`<b>${c.code}</b><br>${c.name}`, { sticky: true, className: 'dark-tip' });
+    markers.push(m);
+  });
+  dotLayer = L.layerGroup(markers).addTo(map);
+}
+
+// ── Autocomplete ──────────────────────────────────────────────────────────────
+function setupAutocomplete() {
+  const input  = document.getElementById('inOrigin');
+  const acList = document.getElementById('acList');
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toUpperCase();
+    acList.innerHTML = '';
+    if (q.length < 2) { acList.style.display = 'none'; return; }
+    const hits = centroidsData.filter(c =>
+      c.code.toUpperCase().includes(q) || c.name.toUpperCase().includes(q)
+    ).slice(0, 25);
+    if (!hits.length) { acList.style.display = 'none'; return; }
+    hits.forEach(c => {
+      const div = document.createElement('div');
+      div.textContent = `${c.code}  ${c.name}`;
+      div.addEventListener('mousedown', e => {
+        e.preventDefault();
+        input.value = c.code;
+        acList.style.display = 'none';
+      });
+      acList.appendChild(div);
+    });
+    acList.style.display = 'block';
+  });
+  input.addEventListener('blur', () => setTimeout(() => acList.style.display = 'none', 150));
+}
+
+// ── Fetch and draw flows ──────────────────────────────────────────────────────
+async function fetchFlows(originCode) {
+  if (!originCode) return;
+  currentOrigin = originCode;
+  const period  = document.getElementById('selPeriod').value;
+  const mode    = document.getElementById('selMode').value;
+  const purpose = document.getElementById('selPurpose').value;
+  const n       = document.getElementById('selN').value;
+
+  setOverlay(true, `Loading flows for ${originCode}…<br><small style="color:#718096">(first call per file may take ~30s)</small>`);
+  document.getElementById('btnShow').disabled = true;
+
+  try {
+    const url = `/api/flows-map?origin=${encodeURIComponent(originCode)}&mode=${mode}&purpose=${purpose}&period=${period}&n=${n}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    drawFlows(d);
+  } catch(e) {
+    document.getElementById('panelContent').innerHTML = `<div class="empty-msg" style="color:#fc8181">Error: ${e.message}</div>`;
+  }
+  setOverlay(false);
+  document.getElementById('btnShow').disabled = false;
+}
+
+function drawFlows(data) {
+  flowLayer.clearLayers();
+  if (originMarker) map.removeLayer(originMarker);
+
+  const { origin, origin_name, origin_lat, origin_lon, flows, mode } = data;
+  if (!origin_lat) return;
+
+  const color = MODE_COLORS[mode] || '#63b3ed';
+  const maxFlow = flows.length ? flows[0].flow : 1;
+
+  // Origin marker
+  originMarker = L.circleMarker([origin_lat, origin_lon], {
+    radius: 10, color: '#fff', fillColor: color, fillOpacity: 1, weight: 2
+  }).addTo(map);
+  originMarker.bindTooltip(`<b>ORIGIN</b><br>${origin}<br>${origin_name}`, { permanent: false });
+
+  // Flow lines
+  flows.forEach((f, i) => {
+    const frac = f.flow / maxFlow;
+    const width = Math.max(0.5, frac * 8);
+    const opacity = Math.max(0.15, frac * 0.85);
+
+    const line = L.polyline(
+      [[origin_lat, origin_lon], [f.lat, f.lon]],
+      { color, weight: width, opacity, smoothFactor: 1 }
+    );
+    line.bindTooltip(
+      `<b>${origin} → ${f.dest}</b><br>${f.name}<br>Flow: <b>${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</b>`,
+      { sticky: true }
+    );
+    line.on('click', () => {
+      document.getElementById('inOrigin').value = f.dest;
+      fetchFlows(f.dest);
+    });
+    flowLayer.addLayer(line);
+
+    // Destination dot
+    const dot = L.circleMarker([f.lat, f.lon], {
+      radius: Math.max(3, frac * 7), color, fillColor: color,
+      fillOpacity: Math.max(0.3, frac * 0.9), weight: 1
+    });
+    dot.bindTooltip(`<b>${f.dest}</b><br>${f.name}<br>Flow: ${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}`, { sticky: true });
+    dot.on('click', () => { document.getElementById('inOrigin').value = f.dest; fetchFlows(f.dest); });
+    flowLayer.addLayer(dot);
+  });
+
+  // Fit bounds
+  const pts = [[origin_lat, origin_lon], ...flows.map(f => [f.lat, f.lon])];
+  if (pts.length > 1) map.fitBounds(L.latLngBounds(pts).pad(0.1));
+
+  // Update legend
+  updateLegend(color, maxFlow);
+
+  // Update side panel
+  updatePanel(data);
+}
+
+function updateLegend(color, maxFlow) {
+  const items = document.getElementById('legendItems');
+  const fmtN = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v.toFixed(0);
+  items.innerHTML = [1.0, 0.5, 0.2, 0.05].map(frac => `
+    <div class="leg-item">
+      <div class="leg-line" style="width:${Math.max(2,frac*40)}px;background:${color};opacity:${Math.max(0.2,frac*0.85)}"></div>
+      <span style="color:#a0aec0">${fmtN(maxFlow * frac)}</span>
+    </div>`).join('');
+}
+
+function updatePanel(data) {
+  const { origin, origin_name, flows, mode, purpose, period } = data;
+  const purposeLabel = getSelectedPurposeLabel();
+  const totalFlow = flows.reduce((s, f) => s + f.flow, 0);
+  const maxFlow   = flows.length ? flows[0].flow : 1;
+  const color     = MODE_COLORS[mode] || '#63b3ed';
+
+  const statsHtml = `
+    <div class="stat-row"><span>Origin</span><span class="stat-val">${origin}</span></div>
+    <div class="stat-row"><span>Name</span><span class="stat-val" style="font-size:0.72rem">${origin_name}</span></div>
+    <div class="stat-row"><span>Mode</span><span class="stat-val">${mode}</span></div>
+    <div class="stat-row"><span>Purpose</span><span class="stat-val">${purposeLabel}</span></div>
+    <div class="stat-row"><span>Period</span><span class="stat-val">${period==='typical_week'?'Typical Wk':'AM Peak'}</span></div>
+    <div class="stat-row"><span>Showing top</span><span class="stat-val">${flows.length} destinations</span></div>
+    <div class="stat-row"><span>Total shown flow</span><span class="stat-val">${totalFlow.toLocaleString(undefined,{maximumFractionDigits:0})}</span></div>
+  `;
+
+  const flowsHtml = flows.map((f, i) => `
+    <div class="flow-item" onclick="document.getElementById('inOrigin').value='${f.dest}';fetchFlows('${f.dest}')">
+      <div style="display:flex;justify-content:space-between">
+        <span class="flow-msoa">${i+1}. ${f.dest}</span>
+      </div>
+      <div class="flow-name">${f.name}</div>
+      <div class="flow-bar-row">
+        <div class="flow-bar-bg"><div class="flow-bar-fill" style="width:${(f.flow/maxFlow*100).toFixed(1)}%;background:${color}"></div></div>
+        <span class="flow-val">${f.flow.toLocaleString(undefined,{maximumFractionDigits:0})}</span>
+      </div>
+    </div>`).join('');
+
+  document.getElementById('panelContent').innerHTML =
+    `<div style="margin-bottom:8px">${statsHtml}</div>
+     <h2 style="margin-top:4px">Top Destinations</h2>
+     <div style="font-size:0.72rem;color:#718096;margin-bottom:6px">Click a row to pivot to that origin</div>
+     ${flowsHtml}`;
+}
+
+// ── Clear ─────────────────────────────────────────────────────────────────────
+document.getElementById('btnClear').addEventListener('click', () => {
+  flowLayer.clearLayers();
+  if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+  document.getElementById('inOrigin').value = '';
+  document.getElementById('panelContent').innerHTML = '<div class="empty-msg">Select an origin MSOA to see top flows</div>';
+  document.getElementById('legendItems').innerHTML = '';
+  currentOrigin = null;
+});
+
+// ── Button ────────────────────────────────────────────────────────────────────
+document.getElementById('btnShow').addEventListener('click', () => {
+  const v = document.getElementById('inOrigin').value.trim();
+  if (v) fetchFlows(v);
+});
+document.getElementById('inOrigin').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) fetchFlows(v); }
+});
+
+// ── Re-fetch when filter changes with current origin ─────────────────────────
+['selPeriod','selMode','selPurpose','selN'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (currentOrigin) fetchFlows(currentOrigin);
+  });
+});
+
+// ── Overlay helper ────────────────────────────────────────────────────────────
+function setOverlay(show, msg) {
+  const el = document.getElementById('loadOverlay');
+  if (show) {
+    document.getElementById('loadMsg').innerHTML = msg || '';
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+// ── Custom tooltip style ──────────────────────────────────────────────────────
+const style = document.createElement('style');
+style.textContent = `
+  .dark-tip .leaflet-tooltip { background:#1e2733; color:#e2e8f0; border-color:#4a5568; font-size:0.78rem; }
+  .leaflet-tooltip { background:#1e2733; color:#e2e8f0; border:1px solid #4a5568; font-size:0.78rem; box-shadow:0 2px 8px rgba(0,0,0,.5); }
+  .leaflet-tooltip-left::before,.leaflet-tooltip-right::before { border-right-color:#4a5568; border-left-color:#4a5568; }
+`;
+document.head.appendChild(style);
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+loadPurposes();
+loadCentroids();
+</script>
+</body>
+</html>
