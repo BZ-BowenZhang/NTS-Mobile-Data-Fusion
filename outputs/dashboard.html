@@ -8,9 +8,13 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f5f7fa; color: #2d3748; }
-  header { background: #1a365d; color: white; padding: 18px 28px; }
+  header { background: #1a365d; color: white; padding: 14px 28px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .header-text { flex: 1; }
   header h1 { font-size: 1.4rem; font-weight: 600; }
   header p { font-size: 0.82rem; opacity: 0.7; margin-top: 2px; }
+  .nav-links { display: flex; gap: 10px; flex-shrink: 0; }
+  .nav-btn { display: inline-block; background: rgba(255,255,255,0.12); color: white; text-decoration: none; border-radius: 6px; padding: 7px 16px; font-size: 0.82rem; font-weight: 600; border: 1px solid rgba(255,255,255,0.25); white-space: nowrap; transition: background 0.15s; }
+  .nav-btn:hover { background: rgba(255,255,255,0.22); }
   .controls { background: white; border-bottom: 1px solid #e2e8f0; padding: 14px 28px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
   .controls label { font-size: 0.82rem; font-weight: 600; color: #4a5568; }
   .controls select { border: 1px solid #cbd5e0; border-radius: 6px; padding: 6px 10px; font-size: 0.85rem; background: white; cursor: pointer; }
@@ -31,8 +35,14 @@
 </head>
 <body>
 <header>
-  <h1>EEH Behavioural Travel — Mode Share Dashboard</h1>
-  <p>NTS-adjusted mode shares by region and distance band</p>
+  <div class="header-text">
+    <h1>EEH Behavioural Travel — Mode Share Dashboard</h1>
+    <p>NTS-adjusted mode shares by region and distance band</p>
+  </div>
+  <nav class="nav-links">
+    <a class="nav-btn" href="/map">OD Flow Map</a>
+    <a class="nav-btn" href="/od">OD Flow Lookup</a>
+  </nav>
 </header>
 <div class="controls">
   <div>
