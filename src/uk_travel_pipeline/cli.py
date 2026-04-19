@@ -10,11 +10,18 @@ from .config import (
     DEFAULT_FACTOR_MIN,
     DEFAULT_LEGACY_OUTPUT_ROOT,
     DEFAULT_MODES,
+    DEFAULT_MODES_WITH_ROAD_SPLIT,
     DEFAULT_MSOA_GEOJSON,
     DEFAULT_MSOA_REGION_LOOKUP,
     DEFAULT_NTS_FILE,
+    DEFAULT_NTS_MODE_TIME_SPLIT,
     DEFAULT_OUTPUTS_ROOT,
+    DEFAULT_POP_LSOA_INTERNAL,
+    DEFAULT_PURPOSE_PARQUET,
+    DEFAULT_PURPOSES_CSV,
     DEFAULT_REGION,
+    DEFAULT_TFN_AREA_TYPE_LSOA,
+    DEFAULT_LSOA_MSOA_LOOKUP,
     DEFAULT_YEAR,
     MatrixConfig,
     ReassignConfig,
@@ -51,6 +58,18 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument("--nts-file", "--nts-csv", dest="nts_file", type=Path, default=DEFAULT_NTS_FILE)
+    parser.add_argument("--purpose-parquet", type=Path, default=DEFAULT_PURPOSE_PARQUET)
+    parser.add_argument("--pop-lsoa-internal-csv", type=Path, default=DEFAULT_POP_LSOA_INTERNAL)
+    parser.add_argument("--tfn-area-type-lsoa-csv", type=Path, default=DEFAULT_TFN_AREA_TYPE_LSOA)
+    parser.add_argument("--lsoa-msoa-lookup-csv", type=Path, default=DEFAULT_LSOA_MSOA_LOOKUP)
+    parser.add_argument("--nts-mode-time-split-csv", type=Path, default=DEFAULT_NTS_MODE_TIME_SPLIT)
+    parser.add_argument("--purposes-csv", type=Path, default=DEFAULT_PURPOSES_CSV)
+    parser.add_argument("--skip-purpose-estimation", action="store_true")
+    parser.add_argument(
+        "--split-road-mode",
+        action="store_true",
+        help="Split ROAD into CYCLE/PRIVATE_CAR/MOTORCYCLE/BUS using NTS shares.",
+    )
     parser.add_argument("--adjusted-parquet", type=Path, default=DEFAULT_ADJUSTED_PARQUET)
     parser.add_argument("--outputs-root", type=Path, default=DEFAULT_OUTPUTS_ROOT)
     parser.add_argument("--legacy-output", action="store_true")
@@ -111,6 +130,14 @@ def main() -> None:
             msoa_geojson=args.msoa_geojson,
             nts_file=args.nts_file,
             adjusted_parquet=args.adjusted_parquet,
+            purpose_parquet=args.purpose_parquet,
+            pop_lsoa_internal_csv=args.pop_lsoa_internal_csv,
+            tfn_area_type_lsoa_csv=args.tfn_area_type_lsoa_csv,
+            lsoa_msoa_lookup_csv=args.lsoa_msoa_lookup_csv,
+            nts_mode_time_split_csv=args.nts_mode_time_split_csv,
+            purposes_csv=args.purposes_csv,
+            estimate_purpose=not args.skip_purpose_estimation,
+            split_road_mode=args.split_road_mode,
             outputs_root=args.outputs_root,
             year=args.year,
             region=args.region,
@@ -122,10 +149,18 @@ def main() -> None:
         print(f"[reassign] wrote {reassign_cfg.adjusted_parquet}")
 
     if args.command in {"run", "matrices"}:
+        modes_arg = args.modes
+        if (
+            args.command == "run"
+            and args.split_road_mode
+            and args.modes.strip().upper() == ",".join(DEFAULT_MODES)
+        ):
+            modes_arg = ",".join(DEFAULT_MODES_WITH_ROAD_SPLIT)
         matrix_cfg = MatrixConfig(
             adjusted_parquet=args.adjusted_parquet,
+            purpose_parquet=args.purpose_parquet,
             outputs_root=args.outputs_root,
-            modes=_modes_from_arg(args.modes),
+            modes=_modes_from_arg(modes_arg),
         )
         print("[matrices] starting")
         run_matrices(matrix_cfg, legacy_output_root=legacy_root)

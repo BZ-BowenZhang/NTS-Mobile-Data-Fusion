@@ -1,5 +1,10 @@
 # BT API raw data
 data/raw/bt_api/
+data/raw/pop_lad_gb
+data/raw/trip_production_calculation_code
+
+# EEH geospatial data
+data/raw/geo/Lower_layer_Super_Output_Areas_(December_2021)_Boundaries_EW_BFC_(V10) cut for EEH/
 
 # Pipeline processed/intermediate data
 data/processed/
@@ -14,3 +19,4 @@ __pycache__/
 build/
 dist/
 
+notebook/
