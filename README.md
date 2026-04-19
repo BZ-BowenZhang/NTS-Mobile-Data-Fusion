@@ -72,6 +72,18 @@ Disable with:
 uk-travel-pipeline run --skip-purpose-estimation
 ```
 
+Optional v0.3.0 feature:
+
+```bash
+uk-travel-pipeline run --split-road-mode
+```
+
+This replaces `ROAD` with four NTS-consolidated submodes:
+- `CYCLE`
+- `PRIVATE_CAR`
+- `MOTORCYCLE`
+- `BUS`
+
 ## Build `msoa_to_region.csv`
 
 If you have an official lookup file that already contains both `MSOA21CD` and a region name column

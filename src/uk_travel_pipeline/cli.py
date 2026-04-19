@@ -10,6 +10,7 @@ from .config import (
     DEFAULT_FACTOR_MIN,
     DEFAULT_LEGACY_OUTPUT_ROOT,
     DEFAULT_MODES,
+    DEFAULT_MODES_WITH_ROAD_SPLIT,
     DEFAULT_MSOA_GEOJSON,
     DEFAULT_MSOA_REGION_LOOKUP,
     DEFAULT_NTS_FILE,
@@ -64,6 +65,11 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nts-mode-time-split-csv", type=Path, default=DEFAULT_NTS_MODE_TIME_SPLIT)
     parser.add_argument("--purposes-csv", type=Path, default=DEFAULT_PURPOSES_CSV)
     parser.add_argument("--skip-purpose-estimation", action="store_true")
+    parser.add_argument(
+        "--split-road-mode",
+        action="store_true",
+        help="Split ROAD into CYCLE/PRIVATE_CAR/MOTORCYCLE/BUS using NTS shares.",
+    )
     parser.add_argument("--adjusted-parquet", type=Path, default=DEFAULT_ADJUSTED_PARQUET)
     parser.add_argument("--outputs-root", type=Path, default=DEFAULT_OUTPUTS_ROOT)
     parser.add_argument("--legacy-output", action="store_true")
@@ -131,6 +137,7 @@ def main() -> None:
             nts_mode_time_split_csv=args.nts_mode_time_split_csv,
             purposes_csv=args.purposes_csv,
             estimate_purpose=not args.skip_purpose_estimation,
+            split_road_mode=args.split_road_mode,
             outputs_root=args.outputs_root,
             year=args.year,
             region=args.region,
@@ -142,11 +149,18 @@ def main() -> None:
         print(f"[reassign] wrote {reassign_cfg.adjusted_parquet}")
 
     if args.command in {"run", "matrices"}:
+        modes_arg = args.modes
+        if (
+            args.command == "run"
+            and args.split_road_mode
+            and args.modes.strip().upper() == ",".join(DEFAULT_MODES)
+        ):
+            modes_arg = ",".join(DEFAULT_MODES_WITH_ROAD_SPLIT)
         matrix_cfg = MatrixConfig(
             adjusted_parquet=args.adjusted_parquet,
             purpose_parquet=args.purpose_parquet,
             outputs_root=args.outputs_root,
-            modes=_modes_from_arg(args.modes),
+            modes=_modes_from_arg(modes_arg),
         )
         print("[matrices] starting")
         run_matrices(matrix_cfg, legacy_output_root=legacy_root)

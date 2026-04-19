@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OD Flow Lookup — EEH BT</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#f5f7fa;color:#2d3748}
+  header{background:#1a365d;color:white;padding:16px 28px;display:flex;align-items:center;gap:20px}
+  header h1{font-size:1.3rem;font-weight:600}
+  header a{color:#90cdf4;font-size:0.82rem;text-decoration:none}
+  header a:hover{text-decoration:underline}
+  .main{max-width:1000px;margin:0 auto;padding:24px 20px;display:flex;flex-direction:column;gap:20px}
+  .card{background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:22px}
+  .card h2{font-size:1rem;font-weight:600;margin-bottom:14px;color:#2d3748}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  label{font-size:0.8rem;font-weight:600;color:#4a5568;display:block;margin-bottom:4px}
+  select,input{width:100%;border:1px solid #cbd5e0;border-radius:6px;padding:7px 10px;font-size:0.87rem;background:white}
+  select:focus,input:focus{outline:none;border-color:#4299e1;box-shadow:0 0 0 2px rgba(66,153,225,.2)}
+  .btn{background:#2b6cb0;color:white;border:none;border-radius:6px;padding:9px 22px;font-size:0.9rem;font-weight:600;cursor:pointer}
+  .btn:hover{background:#2c5282}
+  .btn:disabled{background:#a0aec0;cursor:not-allowed}
+  .btn-sec{background:#e2e8f0;color:#2d3748}
+  .btn-sec:hover{background:#cbd5e0}
+  .result-box{background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;padding:18px;text-align:center;margin-top:14px}
+  .result-box .val{font-size:2.2rem;font-weight:700;color:#2b6cb0}
+  .result-box .lbl{font-size:0.82rem;color:#4a5568;margin-top:4px}
+  .err-box{background:#fff5f5;border:1px solid #fed7d7;border-radius:8px;padding:14px;color:#c53030;font-size:0.85rem;margin-top:14px}
+  .loading{text-align:center;padding:20px;color:#718096;font-size:0.9rem}
+  table{width:100%;border-collapse:collapse;font-size:0.85rem}
+  th{background:#edf2f7;text-align:left;padding:8px 10px;font-weight:600;color:#4a5568;border-bottom:2px solid #e2e8f0}
+  td{padding:7px 10px;border-bottom:1px solid #f0f0f0}
+  tr:hover td{background:#f7fafc}
+  .bar-bg{background:#e2e8f0;border-radius:4px;height:10px;overflow:hidden;min-width:60px}
+  .bar-fill{height:100%;border-radius:4px;background:#4299e1}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600;background:#e9d8fd;color:#6b46c1}
+  .autocomplete-wrap{position:relative}
+  .autocomplete-list{position:absolute;z-index:100;background:white;border:1px solid #cbd5e0;border-radius:6px;max-height:200px;overflow-y:auto;width:100%;box-shadow:0 4px 12px rgba(0,0,0,.1);display:none}
+  .autocomplete-list div{padding:7px 10px;cursor:pointer;font-size:0.85rem}
+  .autocomplete-list div:hover,.autocomplete-list div.active{background:#ebf8ff}
+  .swap-btn{cursor:pointer;background:#edf2f7;border:none;border-radius:50%;width:32px;height:32px;font-size:1.1rem;display:flex;align-items:center;justify-content:center;align-self:flex-end;margin-bottom:2px}
+  .swap-btn:hover{background:#e2e8f0}
+  canvas{max-height:300px}
+  @media(max-width:640px){.grid-4,.grid-2{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div style="flex:1">
+    <h1>OD Flow Lookup</h1>
+  </div>
+  <a href="/">← Dashboard</a>
+  <a href="/map">OD Flow Map</a>
+</header>
+
+<div class="main">
+  <!-- Filters -->
+  <div class="card">
+    <h2>Query Parameters</h2>
+    <div class="grid-4" style="margin-bottom:14px">
+      <div>
+        <label for="selPeriod">Period</label>
+        <select id="selPeriod">
+          <option value="typical_week">Typical Week</option>
+          <option value="weekday_AMpeak">Weekday AM Peak</option>
+        </select>
+      </div>
+      <div>
+        <label for="selMode">Mode</label>
+        <select id="selMode">
+          <option value="PRIVATE_CAR">Private Car</option>
+          <option value="BUS">Bus</option>
+          <option value="CYCLE">Cycle</option>
+          <option value="MOTORCYCLE">Motorcycle</option>
+          <option value="RAIL">Rail</option>
+          <option value="SUBWAY">Subway</option>
+          <option value="WALKING">Walking</option>
+        </select>
+      </div>
+      <div>
+        <label for="selPurpose">Purpose</label>
+        <select id="selPurpose">
+          <option value="0">All purposes</option>
+          <option value="1">1 – Commuting</option>
+          <option value="2">2 – Employer Business</option>
+          <option value="3">3 – Education</option>
+          <option value="4">4 – Shopping</option>
+          <option value="5">5 – Personal Business</option>
+          <option value="6">6 – Social/leisure</option>
+          <option value="7">7 – Visit families and friends</option>
+          <option value="8">8 – Holiday/day trip</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Origin / Dest -->
+    <div class="grid-2" style="align-items:end;margin-bottom:14px">
+      <div>
+        <label for="inOrigin">Origin MSOA</label>
+        <div class="autocomplete-wrap">
+          <input id="inOrigin" type="text" placeholder="e.g. E02000001" autocomplete="off">
+          <div class="autocomplete-list" id="acOrigin"></div>
+        </div>
+      </div>
+      <button class="swap-btn" id="swapBtn" title="Swap origin / destination">⇄</button>
+      <div>
+        <label for="inDest">Destination MSOA</label>
+        <div class="autocomplete-wrap">
+          <input id="inDest" type="text" placeholder="e.g. E02000002" autocomplete="off">
+          <div class="autocomplete-list" id="acDest"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn" id="btnLookup">Lookup flow</button>
+      <button class="btn btn-sec" id="btnTop">Show top destinations from origin</button>
+    </div>
+
+    <div id="resultArea"></div>
+  </div>
+
+  <!-- Top destinations table -->
+  <div class="card" id="topCard" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <h2 id="topTitle">Top destinations</h2>
+      <span class="tag" id="topTag"></span>
+    </div>
+    <div id="topContent"></div>
+  </div>
+
+  <!-- Bar chart -->
+  <div class="card" id="chartCard" style="display:none">
+    <h2 id="chartTitle">Flow distribution</h2>
+    <canvas id="topChart"></canvas>
+  </div>
+</div>
+
+<script>
+const API = '';   // same origin
+let allMsoas = [];
+let topChart = null;
+let loadMsoasToken = 0;
+
+function getSelectedPurposeLabel() {
+  const sel = document.getElementById('selPurpose');
+  const opt = sel && sel.options[sel.selectedIndex];
+  return opt ? opt.text : 'All purposes';
+}
+
+async function loadPurposes() {
+  const select = document.getElementById('selPurpose');
+  const current = select.value;
+  try {
+    const r = await fetch(`${API}/api/purposes`);
+    const d = await r.json();
+    const purposes = Array.isArray(d.purposes) ? d.purposes : [];
+    if (!purposes.length) return;
+    select.innerHTML = purposes.map(p => {
+      const label = p.value === 0 ? 'All purposes' : `${p.value} – ${p.label}`;
+      return `<option value="${p.value}">${label}</option>`;
+    }).join('');
+    select.value = current;
+  } catch(e) {
+    // Keep the built-in fallback options if the lookup cannot be fetched.
+  }
+}
+
+// ── MSOA autocomplete ─────────────────────────────────────────────────────────
+async function loadMsoas() {
+  const token = ++loadMsoasToken;
+  const period  = document.getElementById('selPeriod').value;
+  const mode    = document.getElementById('selMode').value;
+  const purpose = document.getElementById('selPurpose').value;
+  try {
+    const r = await fetch(`${API}/api/msoas?period=${period}&mode=${mode}&purpose=${purpose}`);
+    const d = await r.json();
+    if (token !== loadMsoasToken) return;
+    allMsoas = d.msoas || [];
+  } catch(e) {
+    if (token !== loadMsoasToken) return;
+    allMsoas = [];
+  }
+}
+
+function setupAutocomplete(inputEl, listEl) {
+  inputEl.addEventListener('input', () => {
+    const q = inputEl.value.trim().toUpperCase();
+    listEl.innerHTML = '';
+    if (q.length < 3) { listEl.style.display = 'none'; return; }
+    const matches = allMsoas.filter(m => m.toUpperCase().includes(q)).slice(0, 30);
+    if (matches.length === 0) { listEl.style.display = 'none'; return; }
+    matches.forEach(m => {
+      const div = document.createElement('div');
+      div.textContent = m;
+      div.addEventListener('mousedown', e => { e.preventDefault(); inputEl.value = m; listEl.style.display = 'none'; });
+      listEl.appendChild(div);
+    });
+    listEl.style.display = 'block';
+  });
+  inputEl.addEventListener('blur', () => setTimeout(() => { listEl.style.display = 'none'; }, 150));
+}
+
+setupAutocomplete(document.getElementById('inOrigin'), document.getElementById('acOrigin'));
+setupAutocomplete(document.getElementById('inDest'),   document.getElementById('acDest'));
+
+// Swap button
+document.getElementById('swapBtn').addEventListener('click', () => {
+  const a = document.getElementById('inOrigin').value;
+  const b = document.getElementById('inDest').value;
+  document.getElementById('inOrigin').value = b;
+  document.getElementById('inDest').value   = a;
+});
+
+// ── Lookup single flow ────────────────────────────────────────────────────────
+document.getElementById('btnLookup').addEventListener('click', async () => {
+  const origin  = document.getElementById('inOrigin').value.trim();
+  const dest    = document.getElementById('inDest').value.trim();
+  const period  = document.getElementById('selPeriod').value;
+  const mode    = document.getElementById('selMode').value;
+  const purpose = document.getElementById('selPurpose').value;
+  const area    = document.getElementById('resultArea');
+
+  if (!origin || !dest) {
+    area.innerHTML = '<div class="err-box">Please enter both Origin and Destination MSOAs.</div>';
+    return;
+  }
+
+  area.innerHTML = '<div class="loading">Looking up... (first call per file builds an index, may take ~30s)</div>';
+  document.getElementById('btnLookup').disabled = true;
+
+  try {
+    const r = await fetch(`${API}/api/flow?origin=${encodeURIComponent(origin)}&dest=${encodeURIComponent(dest)}&mode=${mode}&purpose=${purpose}&period=${period}`);
+    const d = await r.json();
+    if (!r.ok) {
+      area.innerHTML = `<div class="err-box">${d.error}</div>`;
+    } else {
+      const purposeLabel = getSelectedPurposeLabel();
+      const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
+      area.innerHTML = `
+        <div class="result-box">
+          <div class="val">${d.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+          <div class="lbl">${origin} → ${dest}</div>
+          <div class="lbl" style="margin-top:6px;color:#718096">${mode} &nbsp;|&nbsp; ${purposeLabel} &nbsp;|&nbsp; ${periodLabel}</div>
+        </div>`;
+    }
+  } catch(e) {
+    area.innerHTML = `<div class="err-box">Error: ${e.message}. Is the server running?</div>`;
+  }
+  document.getElementById('btnLookup').disabled = false;
+});
+
+// ── Top destinations ──────────────────────────────────────────────────────────
+document.getElementById('btnTop').addEventListener('click', async () => {
+  const origin  = document.getElementById('inOrigin').value.trim();
+  const period  = document.getElementById('selPeriod').value;
+  const mode    = document.getElementById('selMode').value;
+  const purpose = document.getElementById('selPurpose').value;
+
+  if (!origin) {
+    document.getElementById('resultArea').innerHTML = '<div class="err-box">Please enter an Origin MSOA.</div>';
+    return;
+  }
+
+  document.getElementById('resultArea').innerHTML = '<div class="loading">Loading top destinations... (first call per file builds an index)</div>';
+  document.getElementById('btnTop').disabled = true;
+
+  try {
+    const r = await fetch(`${API}/api/top?origin=${encodeURIComponent(origin)}&mode=${mode}&purpose=${purpose}&period=${period}&n=20`);
+    const d = await r.json();
+    document.getElementById('resultArea').innerHTML = '';
+
+    if (!r.ok || !d.top || d.top.length === 0) {
+      document.getElementById('topCard').style.display = 'none';
+      document.getElementById('chartCard').style.display = 'none';
+      document.getElementById('resultArea').innerHTML = `<div class="err-box">${d.error || 'No data found.'}</div>`;
+    } else {
+      const purposeLabel = getSelectedPurposeLabel();
+      const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
+      const maxFlow = d.top[0].flow;
+
+      document.getElementById('topTitle').textContent = `Top 20 destinations from ${origin}`;
+      document.getElementById('topTag').textContent = `${mode} · ${purposeLabel} · ${periodLabel}`;
+
+      const rows = d.top.map((item, i) => `
+        <tr>
+          <td style="color:#718096;width:30px">${i+1}</td>
+          <td style="font-weight:600">${item.dest}</td>
+          <td style="text-align:right">${item.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
+          <td style="width:160px">
+            <div class="bar-bg"><div class="bar-fill" style="width:${(item.flow/maxFlow*100).toFixed(1)}%"></div></div>
+          </td>
+        </tr>`).join('');
+
+      document.getElementById('topContent').innerHTML = `
+        <table>
+          <thead><tr><th>#</th><th>Destination MSOA</th><th style="text-align:right">Flow</th><th>Relative</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+
+      document.getElementById('topCard').style.display  = 'block';
+
+      // Bar chart
+      if (topChart) topChart.destroy();
+      const ctx = document.getElementById('topChart').getContext('2d');
+      topChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: d.top.map(x => x.dest),
+          datasets: [{ label: 'Flow', data: d.top.map(x => x.flow),
+            backgroundColor: '#4299e1aa', borderColor: '#3182ce', borderWidth: 1.5 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+            y: { title: { display: true, text: 'Flow' } }
+          }
+        }
+      });
+      document.getElementById('chartTitle').textContent = `Flow distribution — ${origin} (${mode})`;
+      document.getElementById('chartCard').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('resultArea').innerHTML = `<div class="err-box">Error: ${e.message}. Is the server running at http://localhost:8765?</div>`;
+  }
+  document.getElementById('btnTop').disabled = false;
+});
+
+// ── Load MSOAs on filter change ───────────────────────────────────────────────
+['selPeriod','selMode','selPurpose'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    allMsoas = [];
+    document.getElementById('inOrigin').value = '';
+    document.getElementById('inDest').value   = '';
+    loadMsoas();
+  });
+});
+
+// Initial MSOA load
+loadPurposes();
+loadMsoas();
+</script>
+</body>
+</html>

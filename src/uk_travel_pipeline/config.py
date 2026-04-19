@@ -21,6 +21,7 @@ DEFAULT_NTS_MODE_TIME_SPLIT = (
 DEFAULT_PURPOSES_CSV = Path("data/raw/trip_production_calculation_code/01202 - NTS Trip Rates v23.0/data_definition/purposes.csv")
 
 DEFAULT_MODES = ("ROAD", "RAIL", "WALKING", "SUBWAY")
+DEFAULT_MODES_WITH_ROAD_SPLIT = ("CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS", "RAIL", "WALKING", "SUBWAY")
 DEFAULT_YEAR = 2024
 DEFAULT_REGION = None
 DEFAULT_FACTOR_MIN = 0.01
@@ -42,6 +43,7 @@ class ReassignConfig:
     nts_mode_time_split_csv: Path = DEFAULT_NTS_MODE_TIME_SPLIT
     purposes_csv: Path = DEFAULT_PURPOSES_CSV
     estimate_purpose: bool = True
+    split_road_mode: bool = False
     outputs_root: Path = DEFAULT_OUTPUTS_ROOT
     year: int = DEFAULT_YEAR
     region: str | None = DEFAULT_REGION

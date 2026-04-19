@@ -1,7 +1,12 @@
 import dask.dataframe as dd
 import pandas as pd
 
-from uk_travel_pipeline.reassign import add_distance_bands, build_nts_mode_shares_by_region, calculate_factors
+from uk_travel_pipeline.reassign import (
+    add_distance_bands,
+    build_nts_mode_shares_by_region,
+    build_road_split_shares_by_region,
+    calculate_factors,
+)
 
 
 def test_add_distance_bands_has_expected_labels():
@@ -89,3 +94,48 @@ def test_factor_clipping():
     pdf["origin_region"] = "East of England"
     factors = calculate_factors(dd.from_pandas(pdf, npartitions=1), nts_band, 0.01, 100.0)
     assert factors["factor"].between(0.01, 100.0).all()
+
+
+def test_build_road_split_shares_by_region():
+    nts = pd.DataFrame(
+        {
+            "Year": ["2024"],
+            "Trip length": ["0-1"],
+            "Region of residence": ["East of England"],
+            "Pedal cycle": [10.0],
+            "Car or van driver": [20.0],
+            "Car or van passenger": [5.0],
+            "Motorcycle": [2.0],
+            "Other private transport": [1.0],
+            "Bus in London": [3.0],
+            "Other local bus": [4.0],
+            "Non-local bus": [5.0],
+        }
+    )
+    out = build_road_split_shares_by_region(nts, year=2024)
+    assert set(out["road_mode"]) == {"CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS"}
+    assert abs(out["road_share"].sum() - 1.0) < 1e-9
+
+
+def test_build_road_split_shares_by_region_zero_signal_falls_back_to_private_car():
+    nts = pd.DataFrame(
+        {
+            "Year": ["2024"],
+            "Trip length": ["0-1"],
+            "Region of residence": ["East of England"],
+            "Pedal cycle": [0.0],
+            "Car or van driver": [0.0],
+            "Car or van passenger": [0.0],
+            "Motorcycle": [0.0],
+            "Other private transport": [0.0],
+            "Bus in London": [0.0],
+            "Other local bus": [0.0],
+            "Non-local bus": [0.0],
+        }
+    )
+    out = build_road_split_shares_by_region(nts, year=2024)
+    share_map = dict(zip(out["road_mode"], out["road_share"]))
+    assert share_map["PRIVATE_CAR"] == 1.0
+    assert share_map["CYCLE"] == 0.0
+    assert share_map["MOTORCYCLE"] == 0.0
+    assert share_map["BUS"] == 0.0
