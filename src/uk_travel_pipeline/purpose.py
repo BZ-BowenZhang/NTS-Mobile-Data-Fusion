@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import dask.dataframe as dd
@@ -8,7 +9,7 @@ import pandas as pd
 from .config import ReassignConfig
 from .io import assert_files_exist, ensure_parent
 
-ID_COLS = ["gender_3", "ns_sec", "soc", "aws", "hh_type"]
+LSOA_CODE_RE = re.compile(r"^[A-Z]010\d{5}$")
 
 NTS_PERIOD_TO_KEY = {
     1: "weekday_AM",
@@ -57,21 +58,43 @@ def _bt_period_key(pdf: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
-    pop_lsoa_internal = pd.read_csv(config.pop_lsoa_internal_csv)
-    lsoa_cols = [c for c in pop_lsoa_internal.columns if c not in ID_COLS]
+def _lsoa_population_columns(columns: pd.Index) -> list[str]:
+    return [c for c in columns if LSOA_CODE_RE.match(str(c))]
+
+
+def _read_lsoa_population_by_hh_type(path: Path) -> pd.DataFrame:
+    columns = pd.read_csv(path, nrows=0).columns
+    if "hh_type" not in columns:
+        raise ValueError(f"Population file {path} must contain `hh_type`.")
+
+    lsoa_cols = _lsoa_population_columns(columns)
+    if not lsoa_cols:
+        raise ValueError(f"Population file {path} does not contain LSOA21CD population columns.")
+
+    pop_lsoa_internal = pd.read_csv(path, usecols=["hh_type", *lsoa_cols])
+    pop_lsoa_internal["hh_type"] = pd.to_numeric(pop_lsoa_internal["hh_type"], errors="coerce")
+    pop_lsoa_internal = pop_lsoa_internal.dropna(subset=["hh_type"])
+    pop_lsoa_internal["hh_type"] = pop_lsoa_internal["hh_type"].astype("int16")
+    pop_lsoa_hh_wide = pop_lsoa_internal.groupby("hh_type", as_index=False)[lsoa_cols].sum()
+
     pop_lsoa_long = pd.melt(
-        pop_lsoa_internal,
-        id_vars=ID_COLS,
+        pop_lsoa_hh_wide,
+        id_vars=["hh_type"],
         value_vars=lsoa_cols,
         var_name="LSOA21CD",
         value_name="pop",
     )
-    pop_lsoa_long["hh_type"] = pd.to_numeric(pop_lsoa_long["hh_type"], errors="coerce")
     pop_lsoa_long["pop"] = pd.to_numeric(pop_lsoa_long["pop"], errors="coerce").fillna(0.0)
+    pop_lsoa_long = pop_lsoa_long[pop_lsoa_long["pop"] > 0]
+    return pop_lsoa_long
+
+
+def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
+    pop_lsoa_long = _read_lsoa_population_by_hh_type(config.pop_lsoa_internal_csv)
 
     tfn_at_lsoa = pd.read_csv(config.tfn_area_type_lsoa_csv)[["lsoa21_code", "tfn_area_type"]]
     tfn_at_lsoa = tfn_at_lsoa.rename(columns={"lsoa21_code": "LSOA21CD"})
+    tfn_at_lsoa["tfn_area_type"] = pd.to_numeric(tfn_at_lsoa["tfn_area_type"], errors="coerce")
     pop_lsoa_long = pop_lsoa_long.merge(tfn_at_lsoa, on="LSOA21CD", how="left")
 
     pop_lsoa_hh = (
@@ -79,8 +102,11 @@ def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
     )
 
     lsoa_msoa = pd.read_csv(config.lsoa_msoa_lookup_csv, usecols=["LSOA21CD", "MSOA21CD"]).drop_duplicates()
+    lsoa_msoa["LSOA21CD"] = lsoa_msoa["LSOA21CD"].astype("string")
+    lsoa_msoa["MSOA21CD"] = lsoa_msoa["MSOA21CD"].astype("string")
     pop_msoa_hh = (
         pop_lsoa_hh.merge(lsoa_msoa, on="LSOA21CD", how="left")
+        .dropna(subset=["MSOA21CD", "tfn_area_type"])
         .groupby(["MSOA21CD", "tfn_area_type", "hh_type"], as_index=False)["pop"]
         .sum()
     )
@@ -113,6 +139,10 @@ def build_msoa_purpose_shares(config: ReassignConfig) -> pd.DataFrame:
     purpose_weights["purpose_share"] = purpose_weights.groupby(
         ["MSOA21CD", "mode_of_transport", "period_key"]
     )["trip_rho"].transform(lambda s: s / s.sum())
+    if config.split_road_mode and "MOTORCYCLE" not in set(purpose_weights["mode_of_transport"].astype(str)):
+        motorcycle_weights = purpose_weights[purpose_weights["mode_of_transport"].astype(str) == "PRIVATE_CAR"].copy()
+        motorcycle_weights["mode_of_transport"] = "MOTORCYCLE"
+        purpose_weights = pd.concat([purpose_weights, motorcycle_weights], ignore_index=True)
 
     purposes = pd.read_csv(config.purposes_csv)
     purposes = purposes.rename(columns={"Purpose": "purpose", "Description": "purpose_desc"})
@@ -174,8 +204,25 @@ def run_purpose_estimation(config: ReassignConfig, adjusted_parquet: Path | None
     out_dd = trips_dd.merge(
         shares,
         on=["origin_msoa", "mode_of_transport", "period_key"],
-        how="inner",
+        how="left",
     )
+    missing_dd = out_dd[out_dd["purpose_share"].isna()]
+    missing_summary = (
+        missing_dd.groupby(["origin_msoa", "mode_of_transport", "period_key"])["volume_adj"]
+        .sum()
+        .reset_index()
+        .compute()
+    )
+    missing_summary = missing_summary[pd.to_numeric(missing_summary["volume_adj"], errors="coerce").fillna(0.0) > 0]
+    if not missing_summary.empty:
+        examples = missing_summary.head(5).to_dict("records")
+        raise ValueError(
+            "Purpose shares are missing for adjusted trips. "
+            "Check that the population, TFN area type, and LSOA-to-MSOA lookup files cover all trip origins. "
+            f"First missing origin/mode/period combinations: {examples}"
+        )
+
+    out_dd = out_dd[~out_dd["purpose_share"].isna()]
     out_dd["purpose"] = out_dd["purpose"].astype("int16")
     out_dd["purpose_desc"] = out_dd["purpose_desc"].astype("string")
     out_dd["purpose_share"] = out_dd["purpose_share"].astype("float64")

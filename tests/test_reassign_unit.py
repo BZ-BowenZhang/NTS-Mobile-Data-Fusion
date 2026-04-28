@@ -1,11 +1,14 @@
 import dask.dataframe as dd
 import pandas as pd
+import pytest
 
 from uk_travel_pipeline.reassign import (
     add_distance_bands,
+    expand_nts_mode_shares_to_split_road_modes,
     build_nts_mode_shares_by_region,
     build_road_split_shares_by_region,
     calculate_factors,
+    _build_msoa_centroids,
 )
 
 
@@ -20,6 +23,22 @@ def test_add_distance_bands_has_expected_labels():
     labels = ["0-1", "1-2", "2-5", "5-10", "10-25", "25-50", "50-100", "100+"]
     out = add_distance_bands(dd.from_pandas(pdf, npartitions=1), labels).compute()
     assert set(out["distance_band"].astype(str)) == {"0-1", "1-2", "2-5", "10-25"}
+
+
+def test_build_msoa_centroids_prefers_bng_columns():
+    msoa = pd.DataFrame(
+        {
+            "MSOA21CD": ["E02000001"],
+            "origin_region": ["London"],
+            "BNG_E": [532384],
+            "BNG_N": [181355],
+        }
+    )
+
+    out = _build_msoa_centroids(msoa)
+
+    assert out.loc[0, "x"] == 532384
+    assert out.loc[0, "y"] == 181355
 
 
 def test_build_nts_mode_shares_by_region_maps_modes():
@@ -96,6 +115,28 @@ def test_factor_clipping():
     assert factors["factor"].between(0.01, 100.0).all()
 
 
+def test_calculate_factors_fails_when_no_distance_groups():
+    pdf = pd.DataFrame(
+        {
+            "origin_region": ["East of England"],
+            "distance_band": [pd.NA],
+            "mode_of_transport": ["ROAD"],
+            "volume": [100],
+        }
+    )
+    nts_band = pd.DataFrame(
+        {
+            "origin_region": ["East of England"],
+            "distance_band": ["0-1"],
+            "bt_mode": ["ROAD"],
+            "nts_share": [1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="No BT trips"):
+        calculate_factors(dd.from_pandas(pdf, npartitions=1), nts_band, 0.01, 100.0)
+
+
 def test_build_road_split_shares_by_region():
     nts = pd.DataFrame(
         {
@@ -139,3 +180,30 @@ def test_build_road_split_shares_by_region_zero_signal_falls_back_to_private_car
     assert share_map["CYCLE"] == 0.0
     assert share_map["MOTORCYCLE"] == 0.0
     assert share_map["BUS"] == 0.0
+
+
+def test_expand_nts_mode_shares_to_split_road_modes():
+    nts_band_mode = pd.DataFrame(
+        {
+            "origin_region": ["East of England", "East of England", "East of England"],
+            "distance_band": ["0-1", "0-1", "0-1"],
+            "bt_mode": ["ROAD", "WALKING", "RAIL"],
+            "nts_share": [0.6, 0.3, 0.1],
+        }
+    )
+    road_shares = pd.DataFrame(
+        {
+            "origin_region": ["East of England"] * 4,
+            "distance_band": ["0-1"] * 4,
+            "road_mode": ["CYCLE", "PRIVATE_CAR", "MOTORCYCLE", "BUS"],
+            "road_share": [0.1, 0.5, 0.2, 0.2],
+        }
+    )
+    out = expand_nts_mode_shares_to_split_road_modes(nts_band_mode, road_shares)
+    share_map = dict(zip(out["bt_mode"], out["nts_share"]))
+    assert abs(share_map["CYCLE"] - 0.06) < 1e-9
+    assert abs(share_map["PRIVATE_CAR"] - 0.30) < 1e-9
+    assert abs(share_map["MOTORCYCLE"] - 0.12) < 1e-9
+    assert abs(share_map["BUS"] - 0.12) < 1e-9
+    assert abs(share_map["WALKING"] - 0.3) < 1e-9
+    assert abs(share_map["RAIL"] - 0.1) < 1e-9

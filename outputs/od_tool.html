@@ -43,6 +43,12 @@
   .autocomplete-list div:hover,.autocomplete-list div.active{background:#ebf8ff}
   .swap-btn{cursor:pointer;background:#edf2f7;border:none;border-radius:50%;width:32px;height:32px;font-size:1.1rem;display:flex;align-items:center;justify-content:center;align-self:flex-end;margin-bottom:2px}
   .swap-btn:hover{background:#e2e8f0}
+  .hint{font-size:0.8rem;color:#718096;margin-bottom:14px;display:none}
+  .compare-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+  .compare-box{background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;text-align:center}
+  .compare-box .kicker{font-size:0.76rem;color:#718096;text-transform:uppercase;letter-spacing:.04em}
+  .compare-box .val{font-size:1.8rem;font-weight:700;color:#2b6cb0;margin-top:6px}
+  .compare-box .sub{font-size:0.8rem;color:#4a5568;margin-top:4px}
   canvas{max-height:300px}
   @media(max-width:640px){.grid-4,.grid-2{grid-template-columns:1fr 1fr}}
 </style>
@@ -71,6 +77,7 @@
       <div>
         <label for="selMode">Mode</label>
         <select id="selMode">
+          <option value="ALL_ROADS">All Roads</option>
           <option value="PRIVATE_CAR">Private Car</option>
           <option value="BUS">Bus</option>
           <option value="CYCLE">Cycle</option>
@@ -78,6 +85,14 @@
           <option value="RAIL">Rail</option>
           <option value="SUBWAY">Subway</option>
           <option value="WALKING">Walking</option>
+        </select>
+      </div>
+      <div>
+        <label for="selView">Data View</label>
+        <select id="selView">
+          <option value="adjusted">After adjustment</option>
+          <option value="raw">Before adjustment</option>
+          <option value="compare">Compare before vs after</option>
         </select>
       </div>
       <div>
@@ -95,6 +110,7 @@
         </select>
       </div>
     </div>
+    <div class="hint" id="purposeHint"></div>
 
     <!-- Origin / Dest -->
     <div class="grid-2" style="align-items:end;margin-bottom:14px">
@@ -140,15 +156,60 @@
 </div>
 
 <script>
-const API = '';   // same origin
+const API = '';
+const TOP_N = 20;
+const VIEW_LABELS = {
+  adjusted: 'BT After adjustment',
+  raw: 'BT Before adjustment',
+  compare: 'Compare BT Before vs After',
+};
+const MODE_LABELS = {
+  ALL_ROADS: 'All Roads',
+  PRIVATE_CAR: 'Private Car',
+  BUS: 'Bus',
+  CYCLE: 'Cycle',
+  MOTORCYCLE: 'Motorcycle',
+  RAIL: 'Rail',
+  SUBWAY: 'Subway',
+  WALKING: 'Walking',
+};
+
 let allMsoas = [];
 let topChart = null;
 let loadMsoasToken = 0;
+
+function getSelectedView() {
+  return document.getElementById('selView').value;
+}
 
 function getSelectedPurposeLabel() {
   const sel = document.getElementById('selPurpose');
   const opt = sel && sel.options[sel.selectedIndex];
   return opt ? opt.text : 'All purposes';
+}
+
+function purposeEnabled() {
+  return getSelectedView() === 'adjusted';
+}
+
+function activePurposeValue() {
+  return purposeEnabled() ? document.getElementById('selPurpose').value : '0';
+}
+
+function activeSource() {
+  return getSelectedView() === 'raw' ? 'raw' : 'adjusted';
+}
+
+function syncPurposeAvailability() {
+  const sel = document.getElementById('selPurpose');
+  const hint = document.getElementById('purposeHint');
+  const enabled = purposeEnabled();
+  if (!enabled) sel.value = '0';
+  sel.disabled = !enabled;
+  hint.style.display = enabled ? 'none' : 'block';
+  hint.textContent = enabled
+    ? ''
+    : 'Purpose split is only available after adjustment, so raw and compare views use All purposes.';
 }
 
 async function loadPurposes() {
@@ -164,23 +225,72 @@ async function loadPurposes() {
       return `<option value="${p.value}">${label}</option>`;
     }).join('');
     select.value = current;
-  } catch(e) {
-    // Keep the built-in fallback options if the lookup cannot be fetched.
+  } catch (e) {
+    // Keep fallback options if the lookup cannot be fetched.
   }
 }
 
-// ── MSOA autocomplete ─────────────────────────────────────────────────────────
+function buildUrl(path, params) {
+  const qs = new URLSearchParams(params);
+  return `${API}${path}?${qs.toString()}`;
+}
+
+async function fetchJson(path, params) {
+  const r = await fetch(buildUrl(path, params));
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Request failed');
+  return d;
+}
+
+async function fetchFlow(source, origin, dest, mode, purpose, period) {
+  try {
+    return await fetchJson('/api/flow', { source, origin, dest, mode, purpose, period });
+  } catch (e) {
+    if (String(e.message).startsWith('Not found:')) {
+      return { origin, dest, mode, purpose: parseInt(purpose, 10), period, source, flow: 0 };
+    }
+    throw e;
+  }
+}
+
+async function fetchTop(source, origin, mode, purpose, period, n = TOP_N) {
+  return fetchJson('/api/top', { source, origin, mode, purpose, period, n });
+}
+
+function mergeTopLists(beforeTop, afterTop, limit = TOP_N) {
+  const merged = new Map();
+  beforeTop.forEach(item => {
+    merged.set(item.dest, { dest: item.dest, before: item.flow, after: 0 });
+  });
+  afterTop.forEach(item => {
+    const entry = merged.get(item.dest) || { dest: item.dest, before: 0, after: 0 };
+    entry.after = item.flow;
+    merged.set(item.dest, entry);
+  });
+  return [...merged.values()]
+    .map(item => ({ ...item, delta: item.after - item.before }))
+    .sort((a, b) => Math.max(b.before, b.after) - Math.max(a.before, a.after))
+    .slice(0, limit);
+}
+
+function destroyChart() {
+  if (topChart) {
+    topChart.destroy();
+    topChart = null;
+  }
+}
+
 async function loadMsoas() {
   const token = ++loadMsoasToken;
-  const period  = document.getElementById('selPeriod').value;
-  const mode    = document.getElementById('selMode').value;
-  const purpose = document.getElementById('selPurpose').value;
+  const period = document.getElementById('selPeriod').value;
+  const mode = document.getElementById('selMode').value;
+  const purpose = activePurposeValue();
+  const source = activeSource();
   try {
-    const r = await fetch(`${API}/api/msoas?period=${period}&mode=${mode}&purpose=${purpose}`);
-    const d = await r.json();
+    const d = await fetchJson('/api/msoas', { period, mode, purpose, source });
     if (token !== loadMsoasToken) return;
     allMsoas = d.msoas || [];
-  } catch(e) {
+  } catch (e) {
     if (token !== loadMsoasToken) return;
     allMsoas = [];
   }
@@ -192,11 +302,15 @@ function setupAutocomplete(inputEl, listEl) {
     listEl.innerHTML = '';
     if (q.length < 3) { listEl.style.display = 'none'; return; }
     const matches = allMsoas.filter(m => m.toUpperCase().includes(q)).slice(0, 30);
-    if (matches.length === 0) { listEl.style.display = 'none'; return; }
+    if (!matches.length) { listEl.style.display = 'none'; return; }
     matches.forEach(m => {
       const div = document.createElement('div');
       div.textContent = m;
-      div.addEventListener('mousedown', e => { e.preventDefault(); inputEl.value = m; listEl.style.display = 'none'; });
+      div.addEventListener('mousedown', e => {
+        e.preventDefault();
+        inputEl.value = m;
+        listEl.style.display = 'none';
+      });
       listEl.appendChild(div);
     });
     listEl.style.display = 'block';
@@ -205,24 +319,158 @@ function setupAutocomplete(inputEl, listEl) {
 }
 
 setupAutocomplete(document.getElementById('inOrigin'), document.getElementById('acOrigin'));
-setupAutocomplete(document.getElementById('inDest'),   document.getElementById('acDest'));
+setupAutocomplete(document.getElementById('inDest'), document.getElementById('acDest'));
 
-// Swap button
 document.getElementById('swapBtn').addEventListener('click', () => {
   const a = document.getElementById('inOrigin').value;
   const b = document.getElementById('inDest').value;
   document.getElementById('inOrigin').value = b;
-  document.getElementById('inDest').value   = a;
+  document.getElementById('inDest').value = a;
 });
 
-// ── Lookup single flow ────────────────────────────────────────────────────────
+function resultMetaText(mode, purposeLabel, periodLabel, viewLabel) {
+  return `${MODE_LABELS[mode] || mode} | ${purposeLabel} | ${periodLabel} | ${viewLabel}`;
+}
+
+function renderSingleFlow(data, origin, dest, mode, purposeLabel, periodLabel) {
+  const area = document.getElementById('resultArea');
+  area.innerHTML = `
+    <div class="result-box">
+      <div class="val">${data.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+      <div class="lbl">${origin} → ${dest}</div>
+      <div class="lbl" style="margin-top:6px;color:#718096">${resultMetaText(mode, purposeLabel, periodLabel, VIEW_LABELS[data.source])}</div>
+    </div>`;
+}
+
+function renderCompareFlow(beforeData, afterData, origin, dest, mode, purposeLabel, periodLabel) {
+  const before = beforeData.flow || 0;
+  const after = afterData.flow || 0;
+  const delta = after - before;
+  const pct = before > 0 ? `${(delta / before * 100).toFixed(1)}%` : 'n/a';
+  const area = document.getElementById('resultArea');
+  area.innerHTML = `
+    <div class="compare-grid">
+      <div class="compare-box">
+        <div class="kicker">Before adjustment</div>
+        <div class="val">${before.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+        <div class="sub">${origin} → ${dest}</div>
+      </div>
+      <div class="compare-box">
+        <div class="kicker">After adjustment</div>
+        <div class="val">${after.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+        <div class="sub">${origin} → ${dest}</div>
+      </div>
+      <div class="compare-box">
+        <div class="kicker">Change</div>
+        <div class="val">${delta.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
+        <div class="sub">${pct} vs raw BT</div>
+      </div>
+    </div>
+    <div class="result-box" style="margin-top:12px">
+      <div class="lbl">${resultMetaText(mode, purposeLabel, periodLabel, VIEW_LABELS.compare)}</div>
+    </div>`;
+}
+
+function renderSingleTop(data, origin, purposeLabel, periodLabel) {
+  const rows = data.top;
+  const maxFlow = rows[0].flow || 1;
+  document.getElementById('topTitle').textContent = `Top ${TOP_N} destinations from ${origin}`;
+  document.getElementById('topTag').textContent = `${VIEW_LABELS[data.source]} · ${purposeLabel} · ${periodLabel}`;
+  document.getElementById('topContent').innerHTML = `
+    <table>
+      <thead><tr><th>#</th><th>Destination MSOA</th><th style="text-align:right">Flow</th><th>Relative</th></tr></thead>
+      <tbody>${rows.map((item, i) => `
+        <tr>
+          <td style="color:#718096;width:30px">${i + 1}</td>
+          <td style="font-weight:600">${item.dest}</td>
+          <td style="text-align:right">${item.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
+          <td style="width:160px"><div class="bar-bg"><div class="bar-fill" style="width:${(item.flow / maxFlow * 100).toFixed(1)}%"></div></div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  destroyChart();
+  const ctx = document.getElementById('topChart').getContext('2d');
+  topChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: rows.map(x => x.dest),
+      datasets: [{
+        label: VIEW_LABELS[data.source],
+        data: rows.map(x => x.flow),
+        backgroundColor: data.source === 'raw' ? '#94a3b8aa' : '#4299e1aa',
+        borderColor: data.source === 'raw' ? '#64748b' : '#3182ce',
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+        y: { title: { display: true, text: 'Flow' } },
+      },
+    },
+  });
+  document.getElementById('chartTitle').textContent = `Flow distribution — ${origin} (${VIEW_LABELS[data.source]})`;
+  document.getElementById('topCard').style.display = 'block';
+  document.getElementById('chartCard').style.display = 'block';
+}
+
+function renderCompareTop(beforeData, afterData, origin, purposeLabel, periodLabel) {
+  const merged = mergeTopLists(beforeData.top || [], afterData.top || [], TOP_N);
+  const maxFlow = merged.length ? Math.max(...merged.map(x => Math.max(x.before, x.after))) : 1;
+  document.getElementById('topTitle').textContent = `Top comparison from ${origin}`;
+  document.getElementById('topTag').textContent = `${VIEW_LABELS.compare} · ${purposeLabel} · ${periodLabel}`;
+  document.getElementById('topContent').innerHTML = `
+    <table>
+      <thead><tr><th>#</th><th>Destination MSOA</th><th style="text-align:right">Before</th><th style="text-align:right">After</th><th style="text-align:right">Delta</th></tr></thead>
+      <tbody>${merged.map((item, i) => `
+        <tr>
+          <td style="color:#718096;width:30px">${i + 1}</td>
+          <td style="font-weight:600">${item.dest}</td>
+          <td style="text-align:right">${item.before.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
+          <td style="text-align:right">${item.after.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
+          <td style="text-align:right;color:${item.delta >= 0 ? '#2b6cb0' : '#c53030'}">${item.delta.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  destroyChart();
+  const ctx = document.getElementById('topChart').getContext('2d');
+  topChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: merged.map(x => x.dest),
+      datasets: [
+        { label: VIEW_LABELS.raw, data: merged.map(x => x.before), backgroundColor: '#94a3b8aa', borderColor: '#64748b', borderWidth: 1.2 },
+        { label: VIEW_LABELS.adjusted, data: merged.map(x => x.after), backgroundColor: '#4299e1aa', borderColor: '#3182ce', borderWidth: 1.2 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      plugins: { legend: { display: true } },
+      scales: {
+        x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+        y: { title: { display: true, text: 'Flow' }, suggestedMax: maxFlow },
+      },
+    },
+  });
+  document.getElementById('chartTitle').textContent = `Before vs after flow distribution — ${origin}`;
+  document.getElementById('topCard').style.display = 'block';
+  document.getElementById('chartCard').style.display = 'block';
+}
+
 document.getElementById('btnLookup').addEventListener('click', async () => {
-  const origin  = document.getElementById('inOrigin').value.trim();
-  const dest    = document.getElementById('inDest').value.trim();
-  const period  = document.getElementById('selPeriod').value;
-  const mode    = document.getElementById('selMode').value;
-  const purpose = document.getElementById('selPurpose').value;
-  const area    = document.getElementById('resultArea');
+  const origin = document.getElementById('inOrigin').value.trim();
+  const dest = document.getElementById('inDest').value.trim();
+  const period = document.getElementById('selPeriod').value;
+  const mode = document.getElementById('selMode').value;
+  const purpose = activePurposeValue();
+  const view = getSelectedView();
+  const purposeLabel = getSelectedPurposeLabel();
+  const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
+  const area = document.getElementById('resultArea');
 
   if (!origin || !dest) {
     area.innerHTML = '<div class="err-box">Please enter both Origin and Destination MSOAs.</div>';
@@ -233,32 +481,30 @@ document.getElementById('btnLookup').addEventListener('click', async () => {
   document.getElementById('btnLookup').disabled = true;
 
   try {
-    const r = await fetch(`${API}/api/flow?origin=${encodeURIComponent(origin)}&dest=${encodeURIComponent(dest)}&mode=${mode}&purpose=${purpose}&period=${period}`);
-    const d = await r.json();
-    if (!r.ok) {
-      area.innerHTML = `<div class="err-box">${d.error}</div>`;
+    if (view === 'compare') {
+      const [beforeData, afterData] = await Promise.all([
+        fetchFlow('raw', origin, dest, mode, '0', period),
+        fetchFlow('adjusted', origin, dest, mode, '0', period),
+      ]);
+      renderCompareFlow(beforeData, afterData, origin, dest, mode, purposeLabel, periodLabel);
     } else {
-      const purposeLabel = getSelectedPurposeLabel();
-      const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
-      area.innerHTML = `
-        <div class="result-box">
-          <div class="val">${d.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
-          <div class="lbl">${origin} → ${dest}</div>
-          <div class="lbl" style="margin-top:6px;color:#718096">${mode} &nbsp;|&nbsp; ${purposeLabel} &nbsp;|&nbsp; ${periodLabel}</div>
-        </div>`;
+      const data = await fetchFlow(view === 'raw' ? 'raw' : 'adjusted', origin, dest, mode, purpose, period);
+      renderSingleFlow(data, origin, dest, mode, purposeLabel, periodLabel);
     }
-  } catch(e) {
+  } catch (e) {
     area.innerHTML = `<div class="err-box">Error: ${e.message}. Is the server running?</div>`;
   }
   document.getElementById('btnLookup').disabled = false;
 });
 
-// ── Top destinations ──────────────────────────────────────────────────────────
 document.getElementById('btnTop').addEventListener('click', async () => {
-  const origin  = document.getElementById('inOrigin').value.trim();
-  const period  = document.getElementById('selPeriod').value;
-  const mode    = document.getElementById('selMode').value;
-  const purpose = document.getElementById('selPurpose').value;
+  const origin = document.getElementById('inOrigin').value.trim();
+  const period = document.getElementById('selPeriod').value;
+  const mode = document.getElementById('selMode').value;
+  const purpose = activePurposeValue();
+  const view = getSelectedView();
+  const purposeLabel = getSelectedPurposeLabel();
+  const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
 
   if (!origin) {
     document.getElementById('resultArea').innerHTML = '<div class="err-box">Please enter an Origin MSOA.</div>';
@@ -269,81 +515,50 @@ document.getElementById('btnTop').addEventListener('click', async () => {
   document.getElementById('btnTop').disabled = true;
 
   try {
-    const r = await fetch(`${API}/api/top?origin=${encodeURIComponent(origin)}&mode=${mode}&purpose=${purpose}&period=${period}&n=20`);
-    const d = await r.json();
     document.getElementById('resultArea').innerHTML = '';
-
-    if (!r.ok || !d.top || d.top.length === 0) {
-      document.getElementById('topCard').style.display = 'none';
-      document.getElementById('chartCard').style.display = 'none';
-      document.getElementById('resultArea').innerHTML = `<div class="err-box">${d.error || 'No data found.'}</div>`;
+    if (view === 'compare') {
+      const [beforeData, afterData] = await Promise.all([
+        fetchTop('raw', origin, mode, '0', period, TOP_N),
+        fetchTop('adjusted', origin, mode, '0', period, TOP_N),
+      ]);
+      const hasData = (beforeData.top && beforeData.top.length) || (afterData.top && afterData.top.length);
+      if (!hasData) throw new Error('No data found.');
+      renderCompareTop(beforeData, afterData, origin, purposeLabel, periodLabel);
     } else {
-      const purposeLabel = getSelectedPurposeLabel();
-      const periodLabel = period === 'typical_week' ? 'Typical Week' : 'Weekday AM Peak';
-      const maxFlow = d.top[0].flow;
-
-      document.getElementById('topTitle').textContent = `Top 20 destinations from ${origin}`;
-      document.getElementById('topTag').textContent = `${mode} · ${purposeLabel} · ${periodLabel}`;
-
-      const rows = d.top.map((item, i) => `
-        <tr>
-          <td style="color:#718096;width:30px">${i+1}</td>
-          <td style="font-weight:600">${item.dest}</td>
-          <td style="text-align:right">${item.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</td>
-          <td style="width:160px">
-            <div class="bar-bg"><div class="bar-fill" style="width:${(item.flow/maxFlow*100).toFixed(1)}%"></div></div>
-          </td>
-        </tr>`).join('');
-
-      document.getElementById('topContent').innerHTML = `
-        <table>
-          <thead><tr><th>#</th><th>Destination MSOA</th><th style="text-align:right">Flow</th><th>Relative</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-
-      document.getElementById('topCard').style.display  = 'block';
-
-      // Bar chart
-      if (topChart) topChart.destroy();
-      const ctx = document.getElementById('topChart').getContext('2d');
-      topChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: d.top.map(x => x.dest),
-          datasets: [{ label: 'Flow', data: d.top.map(x => x.flow),
-            backgroundColor: '#4299e1aa', borderColor: '#3182ce', borderWidth: 1.5 }]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: true,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
-            y: { title: { display: true, text: 'Flow' } }
-          }
-        }
-      });
-      document.getElementById('chartTitle').textContent = `Flow distribution — ${origin} (${mode})`;
-      document.getElementById('chartCard').style.display = 'block';
+      const data = await fetchTop(view === 'raw' ? 'raw' : 'adjusted', origin, mode, purpose, period, TOP_N);
+      if (!data.top || !data.top.length) throw new Error('No data found.');
+      renderSingleTop(data, origin, purposeLabel, periodLabel);
     }
-  } catch(e) {
-    document.getElementById('resultArea').innerHTML = `<div class="err-box">Error: ${e.message}. Is the server running at http://localhost:8765?</div>`;
+  } catch (e) {
+    document.getElementById('topCard').style.display = 'none';
+    document.getElementById('chartCard').style.display = 'none';
+    destroyChart();
+    document.getElementById('resultArea').innerHTML = `<div class="err-box">Error: ${e.message}</div>`;
   }
   document.getElementById('btnTop').disabled = false;
 });
 
-// ── Load MSOAs on filter change ───────────────────────────────────────────────
-['selPeriod','selMode','selPurpose'].forEach(id => {
+['selPeriod', 'selMode', 'selPurpose', 'selView'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
+    if (id === 'selView') syncPurposeAvailability();
     allMsoas = [];
     document.getElementById('inOrigin').value = '';
-    document.getElementById('inDest').value   = '';
+    document.getElementById('inDest').value = '';
+    document.getElementById('resultArea').innerHTML = '';
+    document.getElementById('topCard').style.display = 'none';
+    document.getElementById('chartCard').style.display = 'none';
+    destroyChart();
     loadMsoas();
   });
 });
 
-// Initial MSOA load
-loadPurposes();
-loadMsoas();
+setupAutocomplete(document.getElementById('inOrigin'), document.getElementById('acOrigin'));
+setupAutocomplete(document.getElementById('inDest'), document.getElementById('acDest'));
+syncPurposeAvailability();
+loadPurposes().finally(() => {
+  syncPurposeAvailability();
+  loadMsoas();
+});
 </script>
 </body>
 </html>

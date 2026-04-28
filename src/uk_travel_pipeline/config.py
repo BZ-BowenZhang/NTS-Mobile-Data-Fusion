@@ -57,6 +57,7 @@ class MatrixConfig:
     purpose_parquet: Path | None = DEFAULT_PURPOSE_PARQUET
     outputs_root: Path = DEFAULT_OUTPUTS_ROOT
     modes: tuple[str, ...] = DEFAULT_MODES
+    purpose_only: bool = False
 
 
 @dataclass(frozen=True)

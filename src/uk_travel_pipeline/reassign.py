@@ -123,6 +123,39 @@ def _add_distances(pdf: pd.DataFrame) -> pd.DataFrame:
     return pdf
 
 
+def _build_msoa_centroids(msoa: gpd.GeoDataFrame) -> pd.DataFrame:
+    cent = pd.DataFrame(
+        {
+            "MSOA21CD": msoa["MSOA21CD"].astype(str).values,
+            "origin_region": msoa["origin_region"].astype(str).values,
+        }
+    )
+
+    if {"BNG_E", "BNG_N"}.issubset(msoa.columns):
+        cent["x"] = pd.to_numeric(msoa["BNG_E"], errors="coerce").astype("float32")
+        cent["y"] = pd.to_numeric(msoa["BNG_N"], errors="coerce").astype("float32")
+    else:
+        cent["x"] = np.nan
+        cent["y"] = np.nan
+
+    missing = cent["x"].isna() | cent["y"].isna()
+    if missing.any():
+        geom_centroids = msoa.loc[missing, "geometry"].centroid
+        cent.loc[missing, "x"] = geom_centroids.x.values.astype("float32")
+        cent.loc[missing, "y"] = geom_centroids.y.values.astype("float32")
+
+    missing_after = cent["x"].isna() | cent["y"].isna()
+    if missing_after.any():
+        examples = cent.loc[missing_after, "MSOA21CD"].head(5).tolist()
+        raise ValueError(
+            "Could not derive valid MSOA centroid coordinates. "
+            "Provide BNG_E/BNG_N columns or valid projected geometries. "
+            f"First missing MSOAs: {examples}"
+        )
+
+    return cent
+
+
 def add_distance_bands(trips_dd: dd.DataFrame, labels: list[str]) -> dd.DataFrame:
     bins = [0, 1, 2, 5, 10, 25, 50, 100, np.inf]
 
@@ -274,6 +307,27 @@ def build_road_split_shares_by_region(nts_df: pd.DataFrame, year: int) -> pd.Dat
     return out[["origin_region", "distance_band", "road_mode", "road_share"]]
 
 
+def expand_nts_mode_shares_to_split_road_modes(
+    nts_band_mode: pd.DataFrame, road_shares: pd.DataFrame
+) -> pd.DataFrame:
+    non_road = nts_band_mode[nts_band_mode["bt_mode"] != "ROAD"].copy()
+    road = nts_band_mode[nts_band_mode["bt_mode"] == "ROAD"].copy()
+    if road.empty:
+        return nts_band_mode.copy()
+
+    road_expanded = road.merge(road_shares, on=["origin_region", "distance_band"], how="left")
+    road_expanded["road_mode"] = road_expanded["road_mode"].fillna("PRIVATE_CAR")
+    road_expanded["road_share"] = pd.to_numeric(road_expanded["road_share"], errors="coerce").fillna(0.0)
+    road_expanded["nts_share"] = (
+        pd.to_numeric(road_expanded["nts_share"], errors="coerce").fillna(0.0) * road_expanded["road_share"]
+    )
+    road_expanded["bt_mode"] = road_expanded["road_mode"]
+    road_expanded = road_expanded[["origin_region", "distance_band", "bt_mode", "nts_share"]]
+
+    combined = pd.concat([non_road, road_expanded], ignore_index=True)
+    return combined.groupby(["origin_region", "distance_band", "bt_mode"], as_index=False)["nts_share"].sum()
+
+
 def calculate_factors(
     trips_dd: dd.DataFrame, nts_band_mode: pd.DataFrame, factor_min: float, factor_max: float
 ) -> pd.DataFrame:
@@ -284,6 +338,11 @@ def calculate_factors(
         .reset_index()
         .rename(columns={"mode_of_transport": "bt_mode", "volume": "bt_volume"})
     )
+    if bt_band_mode.empty:
+        raise ValueError(
+            "No BT trips could be grouped by origin region, distance band, and mode. "
+            "Check MSOA region lookup coverage and centroid/distance inputs."
+        )
 
     bt_band_mode["bt_share"] = bt_band_mode.groupby(["origin_region", "distance_band"])["bt_volume"].transform(
         lambda s: s / s.sum()
@@ -362,15 +421,7 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         msoa["origin_region"] = msoa[region_col]
     msoa["origin_region"] = msoa["origin_region"].map(normalize_region_name)
 
-    msoa["centroid"] = msoa.geometry.centroid
-    cent = pd.DataFrame(
-        {
-            "MSOA21CD": msoa["MSOA21CD"].astype(str).values,
-            "x": msoa["centroid"].x.values.astype("float32"),
-            "y": msoa["centroid"].y.values.astype("float32"),
-            "origin_region": msoa["origin_region"].astype(str).values,
-        }
-    )
+    cent = _build_msoa_centroids(msoa)
 
     cent_o = cent.rename(columns={"MSOA21CD": "origin_msoa", "x": "ox", "y": "oy"})
     cent_d = cent[["MSOA21CD", "x", "y"]].rename(columns={"MSOA21CD": "destination_msoa", "x": "dx", "y": "dy"})
@@ -394,6 +445,7 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
     nts_band_mode["distance_band"] = nts_band_mode["distance_band"].astype("string")
     factors = calculate_factors(trips_dd, nts_band_mode, config.factor_min, config.factor_max)
 
+    nts_band_mode_for_check = nts_band_mode
     trips_dd = trips_dd.merge(
         factors.rename(columns={"bt_mode": "mode_of_transport"}),
         on=["origin_region", "distance_band", "mode_of_transport"],
@@ -410,6 +462,9 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         road_shares = build_road_split_shares_by_region(nts_df, year=config.year)
         road_shares["origin_region"] = road_shares["origin_region"].astype("string")
         road_shares["distance_band"] = road_shares["distance_band"].astype("string")
+        nts_band_mode_for_check = expand_nts_mode_shares_to_split_road_modes(nts_band_mode, road_shares)
+        nts_band_mode_for_check["origin_region"] = nts_band_mode_for_check["origin_region"].astype("string")
+        nts_band_mode_for_check["distance_band"] = nts_band_mode_for_check["distance_band"].astype("string")
         road_total_before = (
             dd.to_numeric(trips_dd[trips_dd["mode_of_transport"] == "ROAD"]["volume_adj"], errors="coerce")
             .fillna(0.0)
@@ -445,7 +500,7 @@ def run_reassign(config: ReassignConfig, legacy_output_root: Path | None = None)
         lambda s: s / s.sum()
     )
     check = check.rename(columns={"mode_of_transport": "bt_mode"})
-    check = check.merge(nts_band_mode, on=["origin_region", "distance_band", "bt_mode"], how="left")
+    check = check.merge(nts_band_mode_for_check, on=["origin_region", "distance_band", "bt_mode"], how="left")
 
     reassign_out = config.outputs_root / "reassign"
     ensure_dir(reassign_out)

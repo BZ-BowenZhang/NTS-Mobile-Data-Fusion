@@ -106,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     matrix_parser = sub.add_parser("matrices", help="Generate OD matrices from adjusted parquet")
     _add_common_args(matrix_parser)
     matrix_parser.add_argument("--modes", default=",".join(DEFAULT_MODES))
+    matrix_parser.add_argument(
+        "--purpose-only",
+        action="store_true",
+        help="Only generate adjusted by-purpose matrices from --purpose-parquet.",
+    )
     return parser
 
 
@@ -161,6 +166,7 @@ def main() -> None:
             purpose_parquet=args.purpose_parquet,
             outputs_root=args.outputs_root,
             modes=_modes_from_arg(modes_arg),
+            purpose_only=getattr(args, "purpose_only", False),
         )
         print("[matrices] starting")
         run_matrices(matrix_cfg, legacy_output_root=legacy_root)

@@ -28,6 +28,7 @@
   .btn-clear:hover{background:#718096}
 
   label{font-size:0.75rem;color:#a0aec0;white-space:nowrap}
+  .hint-inline{font-size:0.72rem;color:#a0aec0;display:none;flex-basis:100%}
 
   /* ── Autocomplete ── */
   .ac-wrap{position:relative}
@@ -84,6 +85,7 @@
     <div>
       <label>Mode</label><br>
       <select id="selMode">
+        <option value="ALL_ROADS">All Roads</option>
         <option value="PRIVATE_CAR">Private Car</option>
         <option value="BUS">Bus</option>
         <option value="CYCLE">Cycle</option>
@@ -91,6 +93,14 @@
         <option value="RAIL">Rail</option>
         <option value="SUBWAY">Subway</option>
         <option value="WALKING">Walking</option>
+      </select>
+    </div>
+    <div>
+      <label>Data View</label><br>
+      <select id="selView">
+        <option value="adjusted">After adjustment</option>
+        <option value="raw">Before adjustment</option>
+        <option value="compare">Compare: After - Before</option>
       </select>
     </div>
     <div>
@@ -107,6 +117,7 @@
         <option value="8">8 – Holiday/day trip</option>
       </select>
     </div>
+    <div class="hint-inline" id="purposeHint"></div>
     <div>
       <label>Top N flows</label><br>
       <select id="selN">
@@ -163,14 +174,144 @@ let originMarker  = null;
 let currentOrigin = null;
 
 const MODE_COLORS = {
+  ALL_ROADS: '#f6ad55',
   PRIVATE_CAR: '#f56565', BUS: '#4299e1', CYCLE: '#48bb78',
   MOTORCYCLE: '#ed8936', RAIL: '#9f7aea', SUBWAY: '#ed64a6', WALKING: '#38b2ac'
+};
+
+const COMPARE_COLORS = {
+  increase: '#f56565',
+  decrease: '#4299e1',
+  neutral: '#a0aec0'
+};
+
+const MODE_LABELS = {
+  ALL_ROADS: 'All Roads',
+  PRIVATE_CAR: 'Private Car',
+  BUS: 'Bus',
+  CYCLE: 'Cycle',
+  MOTORCYCLE: 'Motorcycle',
+  RAIL: 'Rail',
+  SUBWAY: 'Subway',
+  WALKING: 'Walking',
 };
 
 function getSelectedPurposeLabel() {
   const sel = document.getElementById('selPurpose');
   const opt = sel && sel.options[sel.selectedIndex];
   return opt ? opt.text : 'All purposes';
+}
+
+function getSelectedView() {
+  return document.getElementById('selView').value;
+}
+
+function isCompareView() {
+  return getSelectedView() === 'compare';
+}
+
+function purposeEnabled() {
+  return getSelectedView() === 'adjusted';
+}
+
+function activePurposeValue() {
+  return purposeEnabled() ? document.getElementById('selPurpose').value : '0';
+}
+
+function activeSource() {
+  const view = getSelectedView();
+  if (view === 'raw') return 'raw';
+  if (view === 'compare') return 'compare';
+  return 'adjusted';
+}
+
+function signedFmt(value, digits = 0) {
+  const formatted = Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+  if (value > 0) return `+ ${formatted}`;
+  if (value < 0) return `- ${formatted}`;
+  return '0';
+}
+
+function flowColor(flow, source) {
+  if (source !== 'compare') return null;
+  if (flow > 0) return COMPARE_COLORS.increase;
+  if (flow < 0) return COMPARE_COLORS.decrease;
+  return COMPARE_COLORS.neutral;
+}
+
+async function fetchMapData(originCode, period, mode, purpose, n, source) {
+  const buildUrl = actualSource =>
+    `/api/flows-map?origin=${encodeURIComponent(originCode)}&mode=${mode}&purpose=${purpose}&period=${period}&source=${actualSource}&n=${n}`;
+
+  if (source !== 'compare') {
+    const r = await fetch(buildUrl(source));
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    return d;
+  }
+
+  const [adjustedResp, rawResp] = await Promise.all([
+    fetch(buildUrl('adjusted')),
+    fetch(buildUrl('raw')),
+  ]);
+  const adjusted = await adjustedResp.json();
+  const raw = await rawResp.json();
+  if (!adjustedResp.ok) throw new Error(adjusted.error);
+  if (!rawResp.ok) throw new Error(raw.error);
+
+  const combined = new Map();
+  const upsert = (rows, key) => {
+    rows.forEach(f => {
+      const current = combined.get(f.dest) || {
+        dest: f.dest,
+        name: f.name,
+        lat: f.lat,
+        lon: f.lon,
+        adjusted_flow: 0,
+        raw_flow: 0,
+      };
+      current.name = current.name || f.name;
+      current.lat = current.lat ?? f.lat;
+      current.lon = current.lon ?? f.lon;
+      current[key] = f.flow;
+      combined.set(f.dest, current);
+    });
+  };
+  upsert(adjusted.flows || [], 'adjusted_flow');
+  upsert(raw.flows || [], 'raw_flow');
+
+  const flows = [...combined.values()]
+    .map(f => ({
+      ...f,
+      flow: (f.adjusted_flow || 0) - (f.raw_flow || 0),
+    }))
+    .filter(f => f.flow !== 0)
+    .sort((a, b) => Math.abs(b.flow) - Math.abs(a.flow))
+    .slice(0, Number(n));
+
+  return {
+    origin: adjusted.origin || raw.origin,
+    origin_name: adjusted.origin_name || raw.origin_name,
+    origin_lat: adjusted.origin_lat || raw.origin_lat,
+    origin_lon: adjusted.origin_lon || raw.origin_lon,
+    mode,
+    purpose: Number(purpose),
+    period,
+    source: 'compare',
+    flows,
+  };
+}
+
+function syncPurposeAvailability() {
+  const sel = document.getElementById('selPurpose');
+  const hint = document.getElementById('purposeHint');
+  const enabled = purposeEnabled();
+  if (!enabled) sel.value = '0';
+  sel.disabled = !enabled;
+  hint.style.display = enabled ? 'none' : 'block';
+  hint.textContent = enabled
+    ? ''
+    : 'Purpose split is only available after adjustment, so raw and compare views use All purposes.';
 }
 
 async function loadPurposes() {
@@ -259,17 +400,15 @@ async function fetchFlows(originCode) {
   currentOrigin = originCode;
   const period  = document.getElementById('selPeriod').value;
   const mode    = document.getElementById('selMode').value;
-  const purpose = document.getElementById('selPurpose').value;
+  const purpose = activePurposeValue();
+  const source  = activeSource();
   const n       = document.getElementById('selN').value;
 
   setOverlay(true, `Loading flows for ${originCode}…<br><small style="color:#718096">(first call per file may take ~30s)</small>`);
   document.getElementById('btnShow').disabled = true;
 
   try {
-    const url = `/api/flows-map?origin=${encodeURIComponent(originCode)}&mode=${mode}&purpose=${purpose}&period=${period}&n=${n}`;
-    const r = await fetch(url);
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
+    const d = await fetchMapData(originCode, period, mode, purpose, n, source);
     drawFlows(d);
   } catch(e) {
     document.getElementById('panelContent').innerHTML = `<div class="empty-msg" style="color:#fc8181">Error: ${e.message}</div>`;
@@ -282,30 +421,35 @@ function drawFlows(data) {
   flowLayer.clearLayers();
   if (originMarker) map.removeLayer(originMarker);
 
-  const { origin, origin_name, origin_lat, origin_lon, flows, mode } = data;
+  const { origin, origin_name, origin_lat, origin_lon, flows, mode, source } = data;
   if (!origin_lat) return;
 
   const color = MODE_COLORS[mode] || '#63b3ed';
-  const maxFlow = flows.length ? flows[0].flow : 1;
+  const maxMagnitude = flows.length ? Math.max(...flows.map(f => Math.abs(f.flow))) : 1;
+  const originColor = source === 'compare' ? COMPARE_COLORS.neutral : color;
 
   // Origin marker
   originMarker = L.circleMarker([origin_lat, origin_lon], {
-    radius: 10, color: '#fff', fillColor: color, fillOpacity: 1, weight: 2
+    radius: 10, color: '#fff', fillColor: originColor, fillOpacity: 1, weight: 2
   }).addTo(map);
   originMarker.bindTooltip(`<b>ORIGIN</b><br>${origin}<br>${origin_name}`, { permanent: false });
 
   // Flow lines
   flows.forEach((f, i) => {
-    const frac = f.flow / maxFlow;
+    const frac = Math.abs(f.flow) / maxMagnitude;
     const width = Math.max(0.5, frac * 8);
     const opacity = Math.max(0.15, frac * 0.85);
+    const flowLineColor = flowColor(f.flow, source) || color;
+    const flowLabel = source === 'compare'
+      ? `Change (After - Before): <b>${signedFmt(f.flow, 1)}</b><br>After: ${signedFmt(f.adjusted_flow || 0, 1).replace('+','')}<br>Before: ${signedFmt(f.raw_flow || 0, 1).replace('+','')}`
+      : `Flow: <b>${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</b>`;
 
     const line = L.polyline(
       [[origin_lat, origin_lon], [f.lat, f.lon]],
-      { color, weight: width, opacity, smoothFactor: 1 }
+      { color: flowLineColor, weight: width, opacity, smoothFactor: 1 }
     );
     line.bindTooltip(
-      `<b>${origin} → ${f.dest}</b><br>${f.name}<br>Flow: <b>${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}</b>`,
+      `<b>${origin} → ${f.dest}</b><br>${f.name}<br>${flowLabel}`,
       { sticky: true }
     );
     line.on('click', () => {
@@ -316,10 +460,15 @@ function drawFlows(data) {
 
     // Destination dot
     const dot = L.circleMarker([f.lat, f.lon], {
-      radius: Math.max(3, frac * 7), color, fillColor: color,
+      radius: Math.max(3, frac * 7), color: flowLineColor, fillColor: flowLineColor,
       fillOpacity: Math.max(0.3, frac * 0.9), weight: 1
     });
-    dot.bindTooltip(`<b>${f.dest}</b><br>${f.name}<br>Flow: ${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}`, { sticky: true });
+    dot.bindTooltip(
+      source === 'compare'
+        ? `<b>${f.dest}</b><br>${f.name}<br>Change (After - Before): ${signedFmt(f.flow, 1)}<br>After: ${(f.adjusted_flow || 0).toLocaleString(undefined,{maximumFractionDigits:1})}<br>Before: ${(f.raw_flow || 0).toLocaleString(undefined,{maximumFractionDigits:1})}`
+        : `<b>${f.dest}</b><br>${f.name}<br>Flow: ${f.flow.toLocaleString(undefined,{maximumFractionDigits:1})}`,
+      { sticky: true }
+    );
     dot.on('click', () => { document.getElementById('inOrigin').value = f.dest; fetchFlows(f.dest); });
     flowLayer.addLayer(dot);
   });
@@ -329,37 +478,57 @@ function drawFlows(data) {
   if (pts.length > 1) map.fitBounds(L.latLngBounds(pts).pad(0.1));
 
   // Update legend
-  updateLegend(color, maxFlow);
+  updateLegend(source === 'compare' ? null : color, maxMagnitude, source);
 
   // Update side panel
   updatePanel(data);
 }
 
-function updateLegend(color, maxFlow) {
+function updateLegend(color, maxFlow, source) {
   const items = document.getElementById('legendItems');
   const fmtN = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v.toFixed(0);
-  items.innerHTML = [1.0, 0.5, 0.2, 0.05].map(frac => `
+  const widthLegend = [1.0, 0.5, 0.2, 0.05].map(frac => `
     <div class="leg-item">
-      <div class="leg-line" style="width:${Math.max(2,frac*40)}px;background:${color};opacity:${Math.max(0.2,frac*0.85)}"></div>
-      <span style="color:#a0aec0">${fmtN(maxFlow * frac)}</span>
+      <div class="leg-line" style="width:${Math.max(2,frac*40)}px;background:${source === 'compare' ? COMPARE_COLORS.neutral : color};opacity:${Math.max(0.2,frac*0.85)}"></div>
+      <span style="color:#a0aec0">${source === 'compare' ? signedFmt(maxFlow * frac) : fmtN(maxFlow * frac)}</span>
     </div>`).join('');
+  if (source === 'compare') {
+    items.innerHTML = `
+      <div class="leg-item"><div class="leg-line" style="width:22px;background:${COMPARE_COLORS.increase};opacity:0.9"></div><span style="color:#a0aec0">Increase</span></div>
+      <div class="leg-item"><div class="leg-line" style="width:22px;background:${COMPARE_COLORS.decrease};opacity:0.9"></div><span style="color:#a0aec0">Decrease</span></div>
+      <div style="margin:6px 0 4px;color:#718096">Line width = |After - Before|</div>
+      ${widthLegend}
+    `;
+    return;
+  }
+  items.innerHTML = widthLegend;
 }
 
 function updatePanel(data) {
-  const { origin, origin_name, flows, mode, purpose, period } = data;
+  const { origin, origin_name, flows, mode, period, source } = data;
   const purposeLabel = getSelectedPurposeLabel();
   const totalFlow = flows.reduce((s, f) => s + f.flow, 0);
-  const maxFlow   = flows.length ? flows[0].flow : 1;
+  const maxFlow   = flows.length ? Math.max(...flows.map(f => Math.abs(f.flow))) : 1;
   const color     = MODE_COLORS[mode] || '#63b3ed';
+  const modeLabel = MODE_LABELS[mode] || mode;
+  const sourceLabel = source === 'compare'
+    ? 'Compare: After - Before'
+    : source === 'raw' ? 'Before adjustment' : 'After adjustment';
+  const sectionTitle = 'Top Destinations';
+  const introText = source === 'compare'
+    ? 'Red = increase, blue = decrease. Click a row to pivot to that destination as the next origin.'
+    : 'Click a row to pivot to that origin';
+  const totalLabel = source === 'compare' ? 'Net shown change' : 'Total shown flow';
 
   const statsHtml = `
     <div class="stat-row"><span>Origin</span><span class="stat-val">${origin}</span></div>
     <div class="stat-row"><span>Name</span><span class="stat-val" style="font-size:0.72rem">${origin_name}</span></div>
-    <div class="stat-row"><span>Mode</span><span class="stat-val">${mode}</span></div>
+    <div class="stat-row"><span>Mode</span><span class="stat-val">${modeLabel}</span></div>
+    <div class="stat-row"><span>Data View</span><span class="stat-val">${sourceLabel}</span></div>
     <div class="stat-row"><span>Purpose</span><span class="stat-val">${purposeLabel}</span></div>
     <div class="stat-row"><span>Period</span><span class="stat-val">${period==='typical_week'?'Typical Wk':'AM Peak'}</span></div>
     <div class="stat-row"><span>Showing top</span><span class="stat-val">${flows.length} destinations</span></div>
-    <div class="stat-row"><span>Total shown flow</span><span class="stat-val">${totalFlow.toLocaleString(undefined,{maximumFractionDigits:0})}</span></div>
+    <div class="stat-row"><span>${totalLabel}</span><span class="stat-val" style="color:${flowColor(totalFlow, source) || '#63b3ed'}">${source === 'compare' ? signedFmt(totalFlow, 0) : totalFlow.toLocaleString(undefined,{maximumFractionDigits:0})}</span></div>
   `;
 
   const flowsHtml = flows.map((f, i) => `
@@ -368,16 +537,17 @@ function updatePanel(data) {
         <span class="flow-msoa">${i+1}. ${f.dest}</span>
       </div>
       <div class="flow-name">${f.name}</div>
+      ${source === 'compare' ? `<div class="flow-name">After: ${(f.adjusted_flow || 0).toLocaleString(undefined,{maximumFractionDigits:0})} | Before: ${(f.raw_flow || 0).toLocaleString(undefined,{maximumFractionDigits:0})}</div>` : ''}
       <div class="flow-bar-row">
-        <div class="flow-bar-bg"><div class="flow-bar-fill" style="width:${(f.flow/maxFlow*100).toFixed(1)}%;background:${color}"></div></div>
-        <span class="flow-val">${f.flow.toLocaleString(undefined,{maximumFractionDigits:0})}</span>
+        <div class="flow-bar-bg"><div class="flow-bar-fill" style="width:${(Math.abs(f.flow)/maxFlow*100).toFixed(1)}%;background:${flowColor(f.flow, source) || color}"></div></div>
+        <span class="flow-val" style="color:${flowColor(f.flow, source) || '#63b3ed'}">${source === 'compare' ? signedFmt(f.flow, 0) : f.flow.toLocaleString(undefined,{maximumFractionDigits:0})}</span>
       </div>
     </div>`).join('');
 
   document.getElementById('panelContent').innerHTML =
     `<div style="margin-bottom:8px">${statsHtml}</div>
-     <h2 style="margin-top:4px">Top Destinations</h2>
-     <div style="font-size:0.72rem;color:#718096;margin-bottom:6px">Click a row to pivot to that origin</div>
+     <h2 style="margin-top:4px">${sectionTitle}</h2>
+     <div style="font-size:0.72rem;color:#718096;margin-bottom:6px">${introText}</div>
      ${flowsHtml}`;
 }
 
@@ -401,8 +571,9 @@ document.getElementById('inOrigin').addEventListener('keydown', e => {
 });
 
 // ── Re-fetch when filter changes with current origin ─────────────────────────
-['selPeriod','selMode','selPurpose','selN'].forEach(id => {
+['selPeriod','selMode','selPurpose','selN','selView'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
+    if (id === 'selView') syncPurposeAvailability();
     if (currentOrigin) fetchFlows(currentOrigin);
   });
 });
@@ -428,7 +599,8 @@ style.textContent = `
 document.head.appendChild(style);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-loadPurposes();
+syncPurposeAvailability();
+loadPurposes().finally(syncPurposeAvailability);
 loadCentroids();
 </script>
 </body>

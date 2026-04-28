@@ -20,15 +20,28 @@ ADJUSTED_REQUIRED_COLUMNS = [
 
 
 def _write_dense_matrix_chunked(
-    df: pd.DataFrame, out_path: Path, value_col: str, origin_chunk_size: int = 400
+    df: pd.DataFrame,
+    out_path: Path,
+    value_col: str,
+    matrix_zones: list[str] | None = None,
+    origin_chunk_size: int = 400,
 ) -> None:
-    if df.empty:
+    if matrix_zones is None:
+        destinations = sorted(df["destination_msoa"].dropna().astype(str).unique().tolist())
+        origins = sorted(df["origin_msoa"].dropna().astype(str).unique().tolist())
+    else:
+        destinations = matrix_zones
+        origins = matrix_zones
+
+    ensure_dir(out_path.parent)
+    if df.empty and not origins:
         pd.DataFrame(columns=["origin_msoa"]).to_csv(out_path, index=False)
         return
 
-    destinations = sorted(df["destination_msoa"].dropna().astype(str).unique().tolist())
-    origins = sorted(df["origin_msoa"].dropna().astype(str).unique().tolist())
-    ensure_dir(out_path.parent)
+    df = df.copy()
+    df["origin_msoa"] = df["origin_msoa"].astype(str)
+    df["destination_msoa"] = df["destination_msoa"].astype(str)
+
     first = True
     for i in range(0, len(origins), origin_chunk_size):
         chunk_origins = origins[i : i + origin_chunk_size]
@@ -41,14 +54,33 @@ def _write_dense_matrix_chunked(
         first = False
 
 
-def _write_mode_matrices(df: pd.DataFrame, modes: tuple[str, ...], out_dir: Path, value_col: str) -> None:
+def _write_mode_matrices(
+    df: pd.DataFrame,
+    modes: tuple[str, ...],
+    out_dir: Path,
+    value_col: str,
+    matrix_suffix: str,
+    matrix_zones: list[str],
+) -> None:
     ensure_dir(out_dir)
     for mode in modes:
         mode_df = df[df["mode_of_transport"] == mode][["origin_msoa", "destination_msoa", value_col]]
-        _write_dense_matrix_chunked(mode_df, out_dir / f"OD_matrix_{mode}_adjusted.csv", value_col=value_col)
+        _write_dense_matrix_chunked(
+            mode_df,
+            out_dir / f"OD_matrix_{mode}_{matrix_suffix}.csv",
+            value_col=value_col,
+            matrix_zones=matrix_zones,
+        )
 
 
-def _write_mode_purpose_matrices(df: pd.DataFrame, modes: tuple[str, ...], out_dir: Path, value_col: str) -> None:
+def _write_mode_purpose_matrices(
+    df: pd.DataFrame,
+    modes: tuple[str, ...],
+    out_dir: Path,
+    value_col: str,
+    matrix_suffix: str,
+    matrix_zones: list[str],
+) -> None:
     ensure_dir(out_dir)
     if "purpose" not in df.columns:
         return
@@ -58,48 +90,145 @@ def _write_mode_purpose_matrices(df: pd.DataFrame, modes: tuple[str, ...], out_d
             mode_purpose_df = df[(df["mode_of_transport"] == mode) & (df["purpose"] == purpose)][
                 ["origin_msoa", "destination_msoa", value_col]
             ]
-            out = out_dir / f"OD_matrix_{mode}_adjusted_by_purpose{purpose}.csv"
-            _write_dense_matrix_chunked(mode_purpose_df, out, value_col=value_col)
+            out = out_dir / f"OD_matrix_{mode}_{matrix_suffix}_by_purpose{purpose}.csv"
+            _write_dense_matrix_chunked(mode_purpose_df, out, value_col=value_col, matrix_zones=matrix_zones)
+
+
+def _write_mode_purpose_matrices_from_dask(
+    df: dd.DataFrame,
+    modes: tuple[str, ...],
+    out_dir: Path,
+    value_col: str,
+    matrix_suffix: str,
+    matrix_zones: list[str],
+    am_peak_only: bool = False,
+) -> None:
+    ensure_dir(out_dir)
+    if "purpose" not in df.columns:
+        return
+
+    purposes = sorted(df["purpose"].dropna().astype(int).drop_duplicates().compute().tolist())
+    if am_peak_only:
+        df = df[(df["weekend_flag"] == 0) & (df["time_period"] == "AM_peak")]
+
+    for purpose in purposes:
+        purpose_dd = df[df["purpose"] == purpose]
+        grouped = (
+            purpose_dd.groupby(["origin_msoa", "destination_msoa", "mode_of_transport", "purpose"])[value_col]
+            .sum()
+            .reset_index()
+            .compute()
+        )
+        for mode in modes:
+            mode_purpose_df = grouped[grouped["mode_of_transport"] == mode][
+                ["origin_msoa", "destination_msoa", value_col]
+            ]
+            out = out_dir / f"OD_matrix_{mode}_{matrix_suffix}_by_purpose{purpose}.csv"
+            _write_dense_matrix_chunked(mode_purpose_df, out, value_col=value_col, matrix_zones=matrix_zones)
 
 
 def run_matrices(config: MatrixConfig, legacy_output_root: Path | None = None) -> None:
     assert_files_exist([config.adjusted_parquet])
     all_data_dd = dd.read_parquet(config.adjusted_parquet)
     assert_dataframe_columns(all_data_dd._meta, ADJUSTED_REQUIRED_COLUMNS, "Adjusted parquet")
-
-    if "volume_adj" in all_data_dd.columns:
-        base_vol = dd.to_numeric(all_data_dd["volume_adj"], errors="coerce").fillna(0)
-    elif "volume" in all_data_dd.columns:
-        base_vol = dd.to_numeric(all_data_dd["volume"], errors="coerce").fillna(5)
-    else:
-        raise ValueError("Adjusted parquet must contain `volume_adj` or `volume`.")
-
-    days_used = dd.to_numeric(all_data_dd["days_used"], errors="coerce").replace(0, float("nan"))
-    all_data_dd["volume_per_day"] = (base_vol / days_used).fillna(0.0)
-    weekend_multiplier = 5 - 3 * all_data_dd["weekend_flag"].astype("int8")
-    all_data_dd["volume_per_typical_week"] = all_data_dd["volume_per_day"] * weekend_multiplier
-
-    by_typical_week = (
-        all_data_dd.groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])["volume_per_typical_week"]
-        .sum()
-        .reset_index()
-        .compute()
-    )
-    by_am_peak = (
-        all_data_dd[(all_data_dd["weekend_flag"] == 0) & (all_data_dd["time_period"] == "AM_peak")]
-        .groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])["volume_per_day"]
-        .sum()
-        .reset_index()
-        .compute()
+    matrix_zones = sorted(
+        pd.concat(
+            [
+                all_data_dd["origin_msoa"].dropna().astype(str).drop_duplicates().compute(),
+                all_data_dd["destination_msoa"].dropna().astype(str).drop_duplicates().compute(),
+            ],
+            ignore_index=True,
+        )
+        .drop_duplicates()
+        .tolist()
     )
 
     typical_dir = config.outputs_root / "matrices" / "typical_week_by_mode"
     ampeak_dir = config.outputs_root / "matrices" / "weekday_AMpeak_by_mode"
-    _write_mode_matrices(by_typical_week, config.modes, typical_dir, "volume_per_typical_week")
-    _write_mode_matrices(by_am_peak, config.modes, ampeak_dir, "volume_per_day")
 
-    by_typical_week_purpose: pd.DataFrame | None = None
-    by_am_peak_purpose: pd.DataFrame | None = None
+    if not config.purpose_only:
+        if "volume" in all_data_dd.columns:
+            raw_base_vol = dd.to_numeric(all_data_dd["volume"], errors="coerce").fillna(0.0)
+        elif "volume_adj" in all_data_dd.columns:
+            raw_base_vol = dd.to_numeric(all_data_dd["volume_adj"], errors="coerce").fillna(0.0)
+        else:
+            raise ValueError("Adjusted parquet must contain `volume` or `volume_adj`.")
+
+        if "volume_adj" in all_data_dd.columns:
+            adjusted_base_vol = dd.to_numeric(all_data_dd["volume_adj"], errors="coerce").fillna(0.0)
+        else:
+            adjusted_base_vol = raw_base_vol
+
+        days_used = dd.to_numeric(all_data_dd["days_used"], errors="coerce").replace(0, float("nan"))
+        all_data_dd["raw_volume_per_day"] = (raw_base_vol / days_used).fillna(0.0)
+        all_data_dd["adjusted_volume_per_day"] = (adjusted_base_vol / days_used).fillna(0.0)
+        weekend_multiplier = 5 - 3 * all_data_dd["weekend_flag"].astype("int8")
+        all_data_dd["raw_volume_per_typical_week"] = all_data_dd["raw_volume_per_day"] * weekend_multiplier
+        all_data_dd["adjusted_volume_per_typical_week"] = all_data_dd["adjusted_volume_per_day"] * weekend_multiplier
+
+        raw_by_typical_week = (
+            all_data_dd.groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])["raw_volume_per_typical_week"]
+            .sum()
+            .reset_index()
+            .compute()
+        )
+        raw_by_am_peak = (
+            all_data_dd[(all_data_dd["weekend_flag"] == 0) & (all_data_dd["time_period"] == "AM_peak")]
+            .groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])["raw_volume_per_day"]
+            .sum()
+            .reset_index()
+            .compute()
+        )
+        adjusted_by_typical_week = (
+            all_data_dd.groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])[
+                "adjusted_volume_per_typical_week"
+            ]
+            .sum()
+            .reset_index()
+            .compute()
+        )
+        adjusted_by_am_peak = (
+            all_data_dd[(all_data_dd["weekend_flag"] == 0) & (all_data_dd["time_period"] == "AM_peak")]
+            .groupby(["origin_msoa", "destination_msoa", "mode_of_transport"])["adjusted_volume_per_day"]
+            .sum()
+            .reset_index()
+            .compute()
+        )
+
+        _write_mode_matrices(
+            raw_by_typical_week, config.modes, typical_dir, "raw_volume_per_typical_week", "raw", matrix_zones
+        )
+        _write_mode_matrices(raw_by_am_peak, config.modes, ampeak_dir, "raw_volume_per_day", "raw", matrix_zones)
+        _write_mode_matrices(
+            adjusted_by_typical_week,
+            config.modes,
+            typical_dir,
+            "adjusted_volume_per_typical_week",
+            "adjusted",
+            matrix_zones,
+        )
+        _write_mode_matrices(
+            adjusted_by_am_peak, config.modes, ampeak_dir, "adjusted_volume_per_day", "adjusted", matrix_zones
+        )
+
+        if legacy_output_root is not None:
+            legacy_typical = legacy_output_root / "matrices" / "typical_week_by_mode"
+            legacy_ampeak = legacy_output_root / "matrices" / "weekday_AMpeak_by_mode"
+            _write_mode_matrices(
+                raw_by_typical_week, config.modes, legacy_typical, "raw_volume_per_typical_week", "raw", matrix_zones
+            )
+            _write_mode_matrices(raw_by_am_peak, config.modes, legacy_ampeak, "raw_volume_per_day", "raw", matrix_zones)
+            _write_mode_matrices(
+                adjusted_by_typical_week,
+                config.modes,
+                legacy_typical,
+                "adjusted_volume_per_typical_week",
+                "adjusted",
+                matrix_zones,
+            )
+            _write_mode_matrices(
+                adjusted_by_am_peak, config.modes, legacy_ampeak, "adjusted_volume_per_day", "adjusted", matrix_zones
+            )
 
     if config.purpose_parquet is not None and config.purpose_parquet.exists():
         purpose_dd = dd.read_parquet(config.purpose_parquet)
@@ -112,33 +241,40 @@ def run_matrices(config: MatrixConfig, legacy_output_root: Path | None = None) -
                 purpose_dd["volume_per_day_purpose"] * purpose_weekend_multiplier
             )
 
-            by_typical_week_purpose = (
-                purpose_dd.groupby(["origin_msoa", "destination_msoa", "mode_of_transport", "purpose"])[
-                    "volume_per_typical_week_purpose"
-                ]
-                .sum()
-                .reset_index()
-                .compute()
+            _write_mode_purpose_matrices_from_dask(
+                purpose_dd,
+                config.modes,
+                typical_dir,
+                "volume_per_typical_week_purpose",
+                "adjusted",
+                matrix_zones,
             )
-            by_am_peak_purpose = (
-                purpose_dd[(purpose_dd["weekend_flag"] == 0) & (purpose_dd["time_period"] == "AM_peak")]
-                .groupby(["origin_msoa", "destination_msoa", "mode_of_transport", "purpose"])["volume_per_day_purpose"]
-                .sum()
-                .reset_index()
-                .compute()
+            _write_mode_purpose_matrices_from_dask(
+                purpose_dd,
+                config.modes,
+                ampeak_dir,
+                "volume_per_day_purpose",
+                "adjusted",
+                matrix_zones,
+                am_peak_only=True,
             )
-            _write_mode_purpose_matrices(
-                by_typical_week_purpose, config.modes, typical_dir, "volume_per_typical_week_purpose"
-            )
-            _write_mode_purpose_matrices(by_am_peak_purpose, config.modes, ampeak_dir, "volume_per_day_purpose")
-
-    if legacy_output_root is not None:
-        legacy_typical = legacy_output_root / "matrices" / "typical_week_by_mode"
-        legacy_ampeak = legacy_output_root / "matrices" / "weekday_AMpeak_by_mode"
-        _write_mode_matrices(by_typical_week, config.modes, legacy_typical, "volume_per_typical_week")
-        _write_mode_matrices(by_am_peak, config.modes, legacy_ampeak, "volume_per_day")
-        if by_typical_week_purpose is not None and by_am_peak_purpose is not None:
-            _write_mode_purpose_matrices(
-                by_typical_week_purpose, config.modes, legacy_typical, "volume_per_typical_week_purpose"
-            )
-            _write_mode_purpose_matrices(by_am_peak_purpose, config.modes, legacy_ampeak, "volume_per_day_purpose")
+            if legacy_output_root is not None:
+                legacy_typical = legacy_output_root / "matrices" / "typical_week_by_mode"
+                legacy_ampeak = legacy_output_root / "matrices" / "weekday_AMpeak_by_mode"
+                _write_mode_purpose_matrices_from_dask(
+                    purpose_dd,
+                    config.modes,
+                    legacy_typical,
+                    "volume_per_typical_week_purpose",
+                    "adjusted",
+                    matrix_zones,
+                )
+                _write_mode_purpose_matrices_from_dask(
+                    purpose_dd,
+                    config.modes,
+                    legacy_ampeak,
+                    "volume_per_day_purpose",
+                    "adjusted",
+                    matrix_zones,
+                    am_peak_only=True,
+                )

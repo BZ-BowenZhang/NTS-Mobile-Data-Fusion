@@ -23,11 +23,16 @@ def test_run_matrices_outputs_files(tmp_path: Path):
     df.to_parquet(adjusted, index=False)
 
     outputs = tmp_path / "outputs"
-    cfg = MatrixConfig(adjusted_parquet=adjusted, outputs_root=outputs, modes=("ROAD", "RAIL"))
+    cfg = MatrixConfig(adjusted_parquet=adjusted, purpose_parquet=None, outputs_root=outputs, modes=("ROAD", "RAIL"))
     run_matrices(cfg)
 
     assert (outputs / "matrices" / "typical_week_by_mode" / "OD_matrix_ROAD_adjusted.csv").exists()
     assert (outputs / "matrices" / "weekday_AMpeak_by_mode" / "OD_matrix_RAIL_adjusted.csv").exists()
+    road = pd.read_csv(outputs / "matrices" / "typical_week_by_mode" / "OD_matrix_ROAD_adjusted.csv")
+    assert road.shape == (3, 4)
+    assert road["origin_msoa"].tolist() == ["A", "B", "C"]
+    assert list(road.columns) == ["origin_msoa", "A", "B", "C"]
+    assert road.loc[road["origin_msoa"] == "C", ["A", "B", "C"]].sum(axis=1).item() == 0
 
 
 def test_run_matrices_outputs_purpose_files(tmp_path: Path):
@@ -56,3 +61,10 @@ def test_run_matrices_outputs_purpose_files(tmp_path: Path):
     run_matrices(cfg)
 
     assert (outputs / "matrices" / "typical_week_by_mode" / "OD_matrix_ROAD_adjusted_by_purpose1.csv").exists()
+    purpose_matrix = pd.read_csv(
+        outputs / "matrices" / "typical_week_by_mode" / "OD_matrix_ROAD_adjusted_by_purpose1.csv"
+    )
+    assert purpose_matrix.shape == (2, 3)
+    assert purpose_matrix["origin_msoa"].tolist() == ["A", "B"]
+    assert list(purpose_matrix.columns) == ["origin_msoa", "A", "B"]
+    assert purpose_matrix.loc[purpose_matrix["origin_msoa"] == "B", ["A", "B"]].sum(axis=1).item() == 0
